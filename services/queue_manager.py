@@ -85,6 +85,30 @@ class QueueManager:
                         break
                 current_day += timedelta(days=1)
 
+        elif mode == "times_per_day":
+            # N times a day: evenly distribute posts across 24 hours (1440 minutes)
+            posts_per_day = max(1, channel.get("posts_per_day", 3))
+            interval = max(1, round(1440 / posts_per_day))
+
+            if existing_times:
+                anchor = max(existing_times)
+            else:
+                if last_pub is None and channel_id:
+                    last_pub = await db.get_last_published_time(channel_id)
+
+                if last_pub:
+                    candidate = last_pub
+                    while candidate + timedelta(minutes=interval) <= now:
+                        candidate += timedelta(minutes=interval)
+                    anchor = candidate
+                else:
+                    anchor = now
+
+            last_time = anchor
+            for _ in range(count_needed):
+                last_time = last_time + timedelta(minutes=interval)
+                slots.append(last_time)
+
         else:
             # Interval mode (minutes) - allow minimum 1 minute
             interval = max(1, channel.get("interval_minutes", 5))

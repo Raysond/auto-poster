@@ -16,10 +16,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-# --- Pydantic Models for Request Body ---
 class ChannelCreate(BaseModel):
     channel_id: str
-    title: str
+    title: Optional[str] = ""
     gdrive_folder_id: str
     gdrive_texts_file_id: Optional[str] = ""
     gdrive_footer_file_id: Optional[str] = ""
@@ -29,6 +28,7 @@ class ChannelCreate(BaseModel):
     interval_minutes: int = 180
     schedule_mode: str = "interval"
     exact_times: str = "10:00,15:00,20:00"
+    posts_per_day: Optional[int] = 3
     buffer_target: int = 3
     is_active: bool = True
 
@@ -45,8 +45,37 @@ class ChannelUpdate(BaseModel):
     interval_minutes: Optional[int] = None
     schedule_mode: Optional[str] = None
     exact_times: Optional[str] = None
+    posts_per_day: Optional[int] = None
     buffer_target: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+async def fetch_telegram_channel_title(channel_id: str) -> Optional[str]:
+    """Fetch chat/channel title via Bot API or Telethon MTProto."""
+    cleaned = str(channel_id).strip()
+    target: str | int = int(cleaned) if cleaned.lstrip("-").isdigit() else cleaned
+
+    # 1. Try via aiogram bot instance
+    if publisher.bot:
+        try:
+            chat = await publisher.bot.get_chat(target)
+            if chat and chat.title:
+                return chat.title
+        except Exception as e:
+            logger.warning(f"Не удалось получить название канала {channel_id} через бота: {e}")
+
+    # 2. Try via Telethon if authorized
+    if await telethon_service.is_authorized():
+        try:
+            client = await telethon_service.get_client()
+            if client:
+                entity = await client.get_entity(target)
+                if hasattr(entity, "title") and entity.title:
+                    return entity.title
+        except Exception as e:
+            logger.warning(f"Не удалось получить название канала {channel_id} через Telethon: {e}")
+
+    return None
 
 
 def get_current_admin(
@@ -104,6 +133,21 @@ async def list_channels(admin: Dict[str, Any] = Depends(get_current_admin)):
     return result
 
 
+@router.get("/telegram/chat-title")
+async def get_telegram_chat_title(
+    channel_id: str,
+    admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """Fetch channel title from Telegram by channel ID or username."""
+    title = await fetch_telegram_channel_title(channel_id)
+    if not title:
+        raise HTTPException(
+            status_code=404,
+            detail="Не удалось получить название канала из Telegram. Убедитесь, что бот добавлен в канал."
+        )
+    return {"channel_id": channel_id, "title": title}
+
+
 @router.post("/channels")
 async def create_channel(data: ChannelCreate, admin: Dict[str, Any] = Depends(get_current_admin)):
     """Add a new channel to auto-poster."""
@@ -111,9 +155,15 @@ async def create_channel(data: ChannelCreate, admin: Dict[str, Any] = Depends(ge
     if existing:
         raise HTTPException(status_code=400, detail="Канал с таким ID уже существует в базе.")
 
-    channel_id = await db.create_channel(data.model_dump())
-    await db.add_log(f"Добавлен новый канал: {data.title} ({data.channel_id})", level="INFO")
-    return {"id": channel_id, "message": "Канал успешно добавлен."}
+    payload = data.model_dump()
+    # Auto-fetch title from Telegram if empty
+    if not payload.get("title") or not payload["title"].strip():
+        fetched_title = await fetch_telegram_channel_title(data.channel_id)
+        payload["title"] = fetched_title or data.channel_id
+
+    channel_id = await db.create_channel(payload)
+    await db.add_log(f"Добавлен новый канал: {payload['title']} ({data.channel_id})", level="INFO")
+    return {"id": channel_id, "title": payload["title"], "message": "Канал успешно добавлен."}
 
 
 @router.get("/channels/{channel_db_id}")
@@ -139,6 +189,15 @@ async def update_channel(
         raise HTTPException(status_code=404, detail="Канал не найден.")
 
     update_dict = {k: v for k, v in data.model_dump().items() if v is not None}
+    # If title was explicitly provided as empty string, try auto-fetching
+    if "title" in update_dict and (not update_dict["title"] or not update_dict["title"].strip()):
+        target_ch_id = update_dict.get("channel_id") or ch["channel_id"]
+        fetched_title = await fetch_telegram_channel_title(target_ch_id)
+        if fetched_title:
+            update_dict["title"] = fetched_title
+        else:
+            del update_dict["title"]
+
     await db.update_channel(channel_db_id, update_dict)
     await db.add_log(f"Обновлены настройки канала {ch['title']}", level="INFO")
     return {"message": "Настройки канала успешно сохранены."}

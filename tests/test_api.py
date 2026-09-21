@@ -54,14 +54,38 @@ async def test_api_status_and_channels(tmp_path):
         assert len(channels) == 1
         assert channels[0]["title"] == "API Test Channel"
 
-        # Update channel
-        update_res = await client.put(f"/api/channels/{ch_id}", json={"title": "Updated Channel"})
+        # Update channel: change title and toggle is_active to False
+        update_res = await client.put(f"/api/channels/{ch_id}", json={"title": "Updated Channel", "is_active": False})
         assert update_res.status_code == 200
 
         # Verify updated
         get_res = await client.get(f"/api/channels/{ch_id}")
         assert get_res.status_code == 200
         assert get_res.json()["title"] == "Updated Channel"
+        assert get_res.json()["is_active"] == 0
+
+        # Toggle is_active back to True
+        toggle_res = await client.put(f"/api/channels/{ch_id}", json={"is_active": True})
+        assert toggle_res.status_code == 200
+        get_toggle = await client.get(f"/api/channels/{ch_id}")
+        assert get_toggle.json()["is_active"] == 1
+
+        # Test creating channel with empty title (should auto-fallback to channel_id when offline)
+        auto_title_ch = {
+            "channel_id": "@autotitlechannel",
+            "title": "",
+            "gdrive_folder_id": "folder_xyz",
+            "schedule_mode": "times_per_day",
+            "posts_per_day": 5
+        }
+        res_auto = await client.post("/api/channels", json=auto_title_ch)
+        assert res_auto.status_code == 200
+        auto_id = res_auto.json()["id"]
+        get_auto = await client.get(f"/api/channels/{auto_id}")
+        assert get_auto.status_code == 200
+        assert get_auto.json()["title"] == "@autotitlechannel"
+        assert get_auto.json()["posts_per_day"] == 5
+        await client.delete(f"/api/channels/{auto_id}")
 
         # Delete channel
         del_res = await client.delete(f"/api/channels/{ch_id}")

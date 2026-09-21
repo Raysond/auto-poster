@@ -104,7 +104,7 @@ function renderChannels() {
   }
 
   elChannelsList.innerHTML = channels.map(ch => {
-    const isAct = ch.is_active;
+    const isAct = !!ch.is_active;
     const bufCount = ch.current_buffer || 0;
     const bufTarget = ch.buffer_target || 3;
     const bufBadgeClass = bufCount >= bufTarget ? 'badge-active' : 'badge-buffer';
@@ -112,6 +112,9 @@ function renderChannels() {
     let scheduleText = '';
     if (ch.schedule_mode === 'exact_times') {
       scheduleText = `Часы: ${ch.exact_times}`;
+    } else if (ch.schedule_mode === 'times_per_day') {
+      const ppd = ch.posts_per_day || 3;
+      scheduleText = `${ppd} раз(а) в сутки`;
     } else {
       const hours = Math.round(ch.interval_minutes / 60 * 10) / 10;
       scheduleText = `Каждые ${hours} ч. (${ch.interval_minutes} мин)`;
@@ -124,9 +127,15 @@ function renderChannels() {
             <div class="channel-name">${escapeHtml(ch.title)}</div>
             <div class="channel-sub">${escapeHtml(ch.channel_id)}</div>
           </div>
-          <span class="badge ${isAct ? 'badge-active' : 'badge-paused'}">
-            ${isAct ? 'Активен' : 'Пауза'}
-          </span>
+          <div class="channel-toggle-wrapper">
+            <span class="channel-toggle-label ${isAct ? 'active' : 'paused'}" id="status-label-${ch.id}">
+              ${isAct ? 'Активен' : 'Пауза'}
+            </span>
+            <label class="switch" title="${isAct ? 'Приостановить канал' : 'Активировать канал'}">
+              <input type="checkbox" id="switch-${ch.id}" ${isAct ? 'checked' : ''} onchange="toggleChannelActive(${ch.id}, this.checked)">
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
 
         <div class="channel-meta">
@@ -142,10 +151,10 @@ function renderChannels() {
         </div>
 
         <div class="channel-card-actions">
-          <button class="btn-primary-sm" onclick="triggerPostNow(${ch.id})">
+          <button class="btn-card-action btn-primary-sm" onclick="triggerPostNow(${ch.id})">
             🚀 Опубликовать сейчас
           </button>
-          <button class="btn-ghost" onclick="openChannelModal(${ch.id})">
+          <button class="btn-card-action btn-ghost" onclick="openChannelModal(${ch.id})">
             ⚙️ Настройки
           </button>
         </div>
@@ -153,6 +162,31 @@ function renderChannels() {
     `;
   }).join('');
 }
+
+window.toggleChannelActive = async function(id, isActive) {
+  const label = document.getElementById(`status-label-${id}`);
+  if (label) {
+    label.textContent = isActive ? 'Активен' : 'Пауза';
+    label.className = `channel-toggle-label ${isActive ? 'active' : 'paused'}`;
+  }
+  try {
+    await api(`/api/channels/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_active: isActive })
+    });
+    const ch = channels.find(c => c.id === id);
+    if (ch) ch.is_active = isActive;
+    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+  } catch (err) {
+    if (label) {
+      label.textContent = !isActive ? 'Активен' : 'Пауза';
+      label.className = `channel-toggle-label ${!isActive ? 'active' : 'paused'}`;
+    }
+    const sw = document.getElementById(`switch-${id}`);
+    if (sw) sw.checked = !isActive;
+    notify('Не удалось обновить статус: ' + err.message, 'error');
+  }
+};
 
 function populatePreviewSelect() {
   elPreviewSelect.innerHTML = '<option value="">-- Выберите канал --</option>' +
@@ -197,10 +231,48 @@ if (elCopySourceSelect) {
     document.getElementById('ch-schedule-mode').value = donor.schedule_mode || 'interval';
     document.getElementById('ch-interval').value = donor.interval_minutes || 180;
     document.getElementById('ch-exact-times').value = donor.exact_times || '10:00,15:00,20:00';
+    const chPostsPerDay = document.getElementById('ch-posts-per-day');
+    if (chPostsPerDay) chPostsPerDay.value = donor.posts_per_day || 3;
     document.getElementById('ch-buffer-target').value = donor.buffer_target || 3;
     document.getElementById('ch-is-active').checked = !!donor.is_active;
     toggleScheduleInputs();
   });
+}
+
+// Auto-fetch channel title from Telegram
+let isFetchingTitle = false;
+async function checkAndAutoFetchTitle() {
+  const titleInput = document.getElementById('ch-title');
+  const channelIdInput = document.getElementById('ch-channel-id');
+  if (!titleInput || !channelIdInput) return;
+
+  const currentTitle = titleInput.value.trim();
+  const channelId = channelIdInput.value.trim();
+
+  if (currentTitle === '' && channelId.length >= 3 && !isFetchingTitle) {
+    isFetchingTitle = true;
+    const originalPlaceholder = titleInput.placeholder;
+    titleInput.placeholder = '⏳ Получение названия из Telegram...';
+    try {
+      const res = await api(`/api/telegram/chat-title?channel_id=${encodeURIComponent(channelId)}`);
+      if (res && res.title && titleInput.value.trim() === '') {
+        titleInput.value = res.title;
+        titleInput.style.borderColor = 'var(--accent-green)';
+        setTimeout(() => { titleInput.style.borderColor = ''; }, 2000);
+      }
+    } catch (err) {
+      console.log('Auto-fetch channel title notice:', err.message);
+    } finally {
+      titleInput.placeholder = originalPlaceholder;
+      isFetchingTitle = false;
+    }
+  }
+}
+
+const elChChannelId = document.getElementById('ch-channel-id');
+if (elChChannelId) {
+  elChChannelId.addEventListener('blur', checkAndAutoFetchTitle);
+  elChChannelId.addEventListener('change', checkAndAutoFetchTitle);
 }
 
 // --- Modal Add / Edit ---
@@ -224,12 +296,16 @@ window.openChannelModal = function(id = null) {
       document.getElementById('ch-schedule-mode').value = ch.schedule_mode || 'interval';
       document.getElementById('ch-interval').value = ch.interval_minutes || 180;
       document.getElementById('ch-exact-times').value = ch.exact_times || '10:00,15:00,20:00';
+      const chPostsPerDay = document.getElementById('ch-posts-per-day');
+      if (chPostsPerDay) chPostsPerDay.value = ch.posts_per_day || 3;
       document.getElementById('ch-buffer-target').value = ch.buffer_target || 3;
       document.getElementById('ch-is-active').checked = !!ch.is_active;
     }
   } else {
     elModalTitle.textContent = 'Добавить новый канал';
     elBtnDeleteChannel.classList.add('hidden');
+    const chPostsPerDay = document.getElementById('ch-posts-per-day');
+    if (chPostsPerDay) chPostsPerDay.value = 3;
     if (elGroupCopyFrom && elCopySourceSelect) {
       if (channels.length > 0) {
         elGroupCopyFrom.classList.remove('hidden');
@@ -257,22 +333,53 @@ document.getElementById('ch-schedule-mode').addEventListener('change', toggleSch
 
 function toggleScheduleInputs() {
   const mode = document.getElementById('ch-schedule-mode').value;
+  const grpInterval = document.getElementById('group-interval');
+  const grpExact = document.getElementById('group-exact-times');
+  const grpTimesPerDay = document.getElementById('group-times-per-day');
+
+  grpInterval.classList.add('hidden');
+  grpExact.classList.add('hidden');
+  if (grpTimesPerDay) grpTimesPerDay.classList.add('hidden');
+
   if (mode === 'exact_times') {
-    document.getElementById('group-interval').classList.add('hidden');
-    document.getElementById('group-exact-times').classList.remove('hidden');
+    grpExact.classList.remove('hidden');
+  } else if (mode === 'times_per_day') {
+    if (grpTimesPerDay) grpTimesPerDay.classList.remove('hidden');
+    updateTimesPerDayHint();
   } else {
-    document.getElementById('group-interval').classList.remove('hidden');
-    document.getElementById('group-exact-times').classList.add('hidden');
+    grpInterval.classList.remove('hidden');
   }
 }
+
+function updateTimesPerDayHint() {
+  const input = document.getElementById('ch-posts-per-day');
+  const hint = document.getElementById('hint-posts-per-day');
+  if (!input || !hint) return;
+  const n = parseInt(input.value, 10) || 1;
+  const hours = Math.round(24 / n * 10) / 10;
+  const mins = Math.round(1440 / n);
+  hint.textContent = `${n} постов в сутки ≈ каждые ${hours} ч. (${mins} мин)`;
+}
+
+const elPostsPerDay = document.getElementById('ch-posts-per-day');
+if (elPostsPerDay) elPostsPerDay.addEventListener('input', updateTimesPerDayHint);
 
 elChannelForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = document.getElementById('channel-db-id').value;
 
+  let titleVal = document.getElementById('ch-title').value.trim();
+  const channelIdVal = document.getElementById('ch-channel-id').value.trim();
+  if (!titleVal && channelIdVal) {
+    await checkAndAutoFetchTitle();
+    titleVal = document.getElementById('ch-title').value.trim();
+  }
+
+  const postsPerDayVal = parseInt(document.getElementById('ch-posts-per-day')?.value, 10) || 3;
+
   const payload = {
-    title: document.getElementById('ch-title').value.trim(),
-    channel_id: document.getElementById('ch-channel-id').value.trim(),
+    title: titleVal,
+    channel_id: channelIdVal,
     gdrive_folder_id: document.getElementById('ch-gdrive-folder').value.trim(),
     gdrive_texts_file_id: document.getElementById('ch-gdrive-texts').value.trim(),
     footer_text: document.getElementById('ch-footer-text').value.trim(),
@@ -281,6 +388,7 @@ elChannelForm.addEventListener('submit', async (e) => {
     schedule_mode: document.getElementById('ch-schedule-mode').value,
     interval_minutes: parseInt(document.getElementById('ch-interval').value, 10),
     exact_times: document.getElementById('ch-exact-times').value.trim(),
+    posts_per_day: postsPerDayVal,
     buffer_target: parseInt(document.getElementById('ch-buffer-target').value, 10),
     is_active: document.getElementById('ch-is-active').checked
   };
@@ -315,7 +423,118 @@ elBtnDeleteChannel.addEventListener('click', async () => {
   }
 });
 
-// --- Preview Tab ---
+// --- Preview Tab & Lightbox ---
+let currentPreviewPhotos = [];
+let currentLightboxIndex = 0;
+
+const elLightbox = document.getElementById('image-lightbox');
+const elLightboxImg = document.getElementById('lightbox-img');
+const elLightboxCounter = document.getElementById('lightbox-counter');
+const elLightboxClose = document.getElementById('lightbox-close');
+const elLightboxPrev = document.getElementById('lightbox-prev');
+const elLightboxNext = document.getElementById('lightbox-next');
+
+window.openLightbox = function(index) {
+  if (!currentPreviewPhotos || currentPreviewPhotos.length === 0) return;
+  currentLightboxIndex = (index >= 0 && index < currentPreviewPhotos.length) ? index : 0;
+  updateLightboxView();
+  if (elLightbox) {
+    elLightbox.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+  if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+};
+
+function closeLightbox() {
+  if (!elLightbox) return;
+  elLightbox.classList.add('hidden');
+  if (elLightboxImg) elLightboxImg.src = '';
+  document.body.style.overflow = '';
+}
+
+function updateLightboxView() {
+  if (!currentPreviewPhotos || currentPreviewPhotos.length === 0 || !elLightboxImg) return;
+  const photo = currentPreviewPhotos[currentLightboxIndex];
+  if (elLightboxCounter) {
+    elLightboxCounter.textContent = `${currentLightboxIndex + 1} / ${currentPreviewPhotos.length}`;
+  }
+
+  // Load high-resolution image with fallback
+  const highResUrl = (photo.thumbnailLink && photo.thumbnailLink.replace(/=s\d+$/, '=s1600')) || `/api/images/${photo.id}`;
+  const fallbackUrl = `/api/images/${photo.id}`;
+
+  elLightboxImg.onerror = () => {
+    elLightboxImg.onerror = null;
+    elLightboxImg.src = fallbackUrl;
+  };
+  elLightboxImg.src = highResUrl;
+
+  if (currentPreviewPhotos.length <= 1) {
+    if (elLightboxPrev) elLightboxPrev.style.display = 'none';
+    if (elLightboxNext) elLightboxNext.style.display = 'none';
+  } else {
+    if (elLightboxPrev) elLightboxPrev.style.display = 'flex';
+    if (elLightboxNext) elLightboxNext.style.display = 'flex';
+  }
+}
+
+function nextLightboxImage() {
+  if (currentPreviewPhotos.length <= 1) return;
+  currentLightboxIndex = (currentLightboxIndex + 1) % currentPreviewPhotos.length;
+  updateLightboxView();
+}
+
+function prevLightboxImage() {
+  if (currentPreviewPhotos.length <= 1) return;
+  currentLightboxIndex = (currentLightboxIndex - 1 + currentPreviewPhotos.length) % currentPreviewPhotos.length;
+  updateLightboxView();
+}
+
+if (elLightboxClose) elLightboxClose.addEventListener('click', closeLightbox);
+if (elLightboxNext) elLightboxNext.addEventListener('click', (e) => { e.stopPropagation(); nextLightboxImage(); });
+if (elLightboxPrev) elLightboxPrev.addEventListener('click', (e) => { e.stopPropagation(); prevLightboxImage(); });
+
+if (elLightbox) {
+  elLightbox.addEventListener('click', (e) => {
+    if (e.target === elLightbox || e.target.classList.contains('lightbox-stage') || e.target.classList.contains('lightbox-img-wrap')) {
+      closeLightbox();
+    }
+  });
+
+  // Touch swipe support for mobile / Telegram WebApp
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  elLightbox.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }
+  }, { passive: true });
+
+  elLightbox.addEventListener('touchend', (e) => {
+    if (e.changedTouches.length === 1) {
+      const diffX = e.changedTouches[0].clientX - touchStartX;
+      const diffY = e.changedTouches[0].clientY - touchStartY;
+      // If horizontal swipe is greater than 40px and dominant over vertical
+      if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 40) {
+        if (diffX < 0) {
+          nextLightboxImage();
+        } else {
+          prevLightboxImage();
+        }
+      }
+    }
+  }, { passive: true });
+}
+
+window.addEventListener('keydown', (e) => {
+  if (!elLightbox || elLightbox.classList.contains('hidden')) return;
+  if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowRight') nextLightboxImage();
+  else if (e.key === 'ArrowLeft') prevLightboxImage();
+});
+
 document.getElementById('btn-generate-preview').addEventListener('click', async () => {
   const channelId = elPreviewSelect.value;
   if (!channelId) {
@@ -330,14 +549,16 @@ document.getElementById('btn-generate-preview').addEventListener('click', async 
 
   try {
     const preview = await api(`/api/channels/${channelId}/preview`, { method: 'POST' });
-    // Render real photos with dual fallback
+    currentPreviewPhotos = preview.photos || [];
+
+    // Render real photos with dual fallback and full screen click
     const gridClass = preview.photos.length === 1 ? 'album-grid single' : 'album-grid';
     elPreviewAlbumGrid.className = gridClass;
     elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => {
       const primaryUrl = (p.thumbnailLink && p.thumbnailLink.replace(/=s\d+$/, '=s800')) || `/api/images/${p.id}`;
       const fallbackUrl = `/api/images/${p.id}`;
       return `
-        <div class="album-photo-wrap">
+        <div class="album-photo-wrap" onclick="openLightbox(${i})" title="Нажмите, чтобы открыть фото на весь экран">
           <img src="${primaryUrl}"
                alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
                class="preview-photo-img"

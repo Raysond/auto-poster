@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Auto-Poster Admin</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=6">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -139,7 +139,8 @@
 
           <div class="form-group">
             <label>Название канала:</label>
-            <input type="text" id="ch-title" class="form-control" placeholder="Мой новостной канал" required>
+            <input type="text" id="ch-title" class="form-control" placeholder="Мой новостной канал">
+            <small class="hint">💡 Можно оставить пустым — название автоматически подтянется из Telegram при вводе ID/@username!</small>
           </div>
 
           <div class="form-group">
@@ -185,6 +186,7 @@
             <label>Режим расписания:</label>
             <select id="ch-schedule-mode" class="form-control">
               <option value="interval">Каждые N минут/часов</option>
+              <option value="times_per_day">N раз в сутки</option>
               <option value="exact_times">Точные часы (10:00, 15:00...)</option>
             </select>
           </div>
@@ -193,6 +195,12 @@
             <label>Интервал (в минутах):</label>
             <input type="number" id="ch-interval" class="form-control" min="5" value="180">
             <small class="hint">180 = каждые 3 часа. 360 = каждые 6 часов.</small>
+          </div>
+
+          <div class="form-group hidden" id="group-times-per-day">
+            <label>Количество публикаций в сутки (N):</label>
+            <input type="number" id="ch-posts-per-day" class="form-control" min="1" max="96" value="3">
+            <small class="hint" id="hint-posts-per-day">3 поста в сутки ≈ каждые 8 ч. (480 мин)</small>
           </div>
 
           <div class="form-group hidden" id="group-exact-times">
@@ -224,8 +232,23 @@
         </form>
       </div>
     </div>
+
+    <!-- Fullscreen Image Lightbox Modal -->
+    <div id="image-lightbox" class="lightbox-modal hidden">
+      <div class="lightbox-top-bar">
+        <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
+        <button id="lightbox-close" class="lightbox-btn-close" title="Закрыть (Esc)">&times;</button>
+      </div>
+      <div class="lightbox-stage">
+        <button id="lightbox-prev" class="lightbox-nav-btn prev" title="Предыдущее (влево)">❮</button>
+        <div class="lightbox-img-wrap">
+          <img id="lightbox-img" src="" alt="Fullscreen view" class="lightbox-img">
+        </div>
+        <button id="lightbox-next" class="lightbox-nav-btn next" title="Следующее (вправо)">❯</button>
+      </div>
+    </div>
   </div>
 
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

@@ -47,11 +47,21 @@ class Database:
                     interval_minutes INTEGER DEFAULT 180,
                     schedule_mode TEXT DEFAULT 'interval',
                     exact_times TEXT DEFAULT '10:00,15:00,20:00',
+                    posts_per_day INTEGER DEFAULT 3,
                     buffer_target INTEGER DEFAULT 3,
                     is_active INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- Migration for existing databases
+                CREATE TABLE IF NOT EXISTS _migrations_dummy (id INT);
+            """)
+            try:
+                await conn.execute("ALTER TABLE channels ADD COLUMN posts_per_day INTEGER DEFAULT 3")
+            except Exception:
+                pass
+            await conn.executescript("""
 
                 CREATE TABLE IF NOT EXISTS used_photos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,8 +132,8 @@ class Database:
                 INSERT INTO channels (
                     channel_id, title, gdrive_folder_id, gdrive_texts_file_id,
                     gdrive_footer_file_id, footer_text, photos_min, photos_max,
-                    interval_minutes, schedule_mode, exact_times, buffer_target, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    interval_minutes, schedule_mode, exact_times, posts_per_day, buffer_target, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 str(data["channel_id"]),
                 data.get("title", "Канал"),
@@ -136,6 +146,7 @@ class Database:
                 data.get("interval_minutes", 180),
                 data.get("schedule_mode", "interval"),
                 data.get("exact_times", "10:00,15:00,20:00"),
+                data.get("posts_per_day", 3),
                 data.get("buffer_target", 3),
                 1 if data.get("is_active", True) else 0
             ))
@@ -148,7 +159,7 @@ class Database:
         for key in [
             "channel_id", "title", "gdrive_folder_id", "gdrive_texts_file_id",
             "gdrive_footer_file_id", "footer_text", "photos_min", "photos_max",
-            "interval_minutes", "schedule_mode", "exact_times", "buffer_target", "is_active"
+            "interval_minutes", "schedule_mode", "exact_times", "posts_per_day", "buffer_target", "is_active"
         ]:
             if key in data:
                 fields.append(f"{key} = ?")

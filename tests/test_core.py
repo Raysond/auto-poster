@@ -88,6 +88,16 @@ async def test_queue_slot_calculations():
     assert len(slots_exact) == 3
     assert slots_exact[0] < slots_exact[1] < slots_exact[2]
 
+    # 3. Times per day mode (4 posts per day = every 360 minutes / 6 hours)
+    ch_per_day = {
+        "schedule_mode": "times_per_day",
+        "posts_per_day": 4
+    }
+    slots_per_day = await qm.calculate_next_time_slots(ch_per_day, 3)
+    assert len(slots_per_day) == 3
+    diff_pd = (slots_per_day[1] - slots_per_day[0]).total_seconds() / 60
+    assert abs(diff_pd - 360) < 1
+
 
 @pytest.mark.asyncio
 async def test_database_lifecycle(tmp_path):
