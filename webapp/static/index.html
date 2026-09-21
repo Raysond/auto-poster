@@ -129,6 +129,14 @@
         <form id="channel-form" class="modal-body">
           <input type="hidden" id="channel-db-id" value="">
 
+          <div class="form-group copy-box hidden" id="group-copy-from">
+            <label class="copy-label">📋 Скопировать настройки из канала:</label>
+            <select id="ch-copy-source" class="form-control">
+              <option value="">-- Выберите канал для копирования --</option>
+            </select>
+            <small class="hint">Быстро заполнит папки Google Drive, футер и расписание из существующего канала.</small>
+          </div>
+
           <div class="form-group">
             <label>Название канала:</label>
             <input type="text" id="ch-title" class="form-control" placeholder="Мой новостной канал" required>

@@ -182,6 +182,39 @@ window.triggerPostNow = async function(id) {
   }
 };
 
+// Modal Elements
+const elModal = document.getElementById('channel-modal');
+const elModalTitle = document.getElementById('modal-title');
+const elModalClose = document.getElementById('modal-close');
+const elModalCancel = document.getElementById('modal-cancel');
+const elChannelForm = document.getElementById('channel-form');
+const elBtnDeleteChannel = document.getElementById('btn-delete-channel');
+const elBtnAddChannel = document.getElementById('btn-add-channel');
+const elGroupCopyFrom = document.getElementById('group-copy-from');
+const elCopySourceSelect = document.getElementById('ch-copy-source');
+
+// Copy settings from donor channel event
+if (elCopySourceSelect) {
+  elCopySourceSelect.addEventListener('change', () => {
+    const donorId = parseInt(elCopySourceSelect.value, 10);
+    if (!donorId) return;
+    const donor = channels.find(c => c.id === donorId);
+    if (!donor) return;
+
+    document.getElementById('ch-gdrive-folder').value = donor.gdrive_folder_id || '';
+    document.getElementById('ch-gdrive-texts').value = donor.gdrive_texts_file_id || '';
+    document.getElementById('ch-footer-text').value = donor.footer_text || '';
+    document.getElementById('ch-photos-min').value = donor.photos_min || 2;
+    document.getElementById('ch-photos-max').value = donor.photos_max || 4;
+    document.getElementById('ch-schedule-mode').value = donor.schedule_mode || 'interval';
+    document.getElementById('ch-interval').value = donor.interval_minutes || 180;
+    document.getElementById('ch-exact-times').value = donor.exact_times || '10:00,15:00,20:00';
+    document.getElementById('ch-buffer-target').value = donor.buffer_target || 3;
+    document.getElementById('ch-is-active').checked = !!donor.is_active;
+    toggleScheduleInputs();
+  });
+}
+
 // --- Modal Add / Edit ---
 window.openChannelModal = function(id = null) {
   elChannelForm.reset();
@@ -190,6 +223,7 @@ window.openChannelModal = function(id = null) {
   if (id) {
     elModalTitle.textContent = 'Настройки канала';
     elBtnDeleteChannel.classList.remove('hidden');
+    elGroupCopyFrom?.classList.add('hidden');
     const ch = channels.find(c => c.id === id);
     if (ch) {
       document.getElementById('ch-title').value = ch.title || '';
@@ -208,6 +242,15 @@ window.openChannelModal = function(id = null) {
   } else {
     elModalTitle.textContent = 'Добавить новый канал';
     elBtnDeleteChannel.classList.add('hidden');
+    if (elGroupCopyFrom && elCopySourceSelect) {
+      if (channels.length > 0) {
+        elGroupCopyFrom.classList.remove('hidden');
+        elCopySourceSelect.innerHTML = '<option value="">-- Выберите канал для копирования настроек --</option>' +
+          channels.map(c => `<option value="${c.id}">${escapeHtml(c.title)} (${escapeHtml(c.channel_id)})</option>`).join('');
+      } else {
+        elGroupCopyFrom.classList.add('hidden');
+      }
+    }
   }
 
   toggleScheduleInputs();
@@ -299,13 +342,17 @@ document.getElementById('btn-generate-preview').addEventListener('click', async 
 
   try {
     const preview = await api(`/api/channels/${channelId}/preview`, { method: 'POST' });
-    elPreviewPhotoCount.textContent = `${preview.photo_count} фото`;
-
-    // Render photo placeholders
+    // Render real photos with fallback
+    const initData = tg?.initData || new URLSearchParams(window.location.search).get('initData') || '';
+    const gridClass = preview.photos.length === 1 ? 'album-grid single' : 'album-grid';
+    elPreviewAlbumGrid.className = gridClass;
     elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => `
-      <div class="photo-placeholder">
-        <span style="font-size:20px;">🖼️</span>
-        <span>${escapeHtml(p.name || `Фото ${i+1}`)}</span>
+      <div class="album-photo-wrap">
+        <img src="/api/images/${p.id}?initData=${encodeURIComponent(initData)}"
+             alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
+             class="preview-photo-img"
+             loading="lazy"
+             onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'photo-placeholder\\'><span>🖼️</span><span style=\\'font-size:10px; margin-top:4px;\\'>${escapeHtml(p.name || 'Фото')}</span></div>';" />
       </div>
     `).join('');
 

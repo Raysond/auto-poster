@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response
 from pydantic import BaseModel
 from core.database import db
 from core.config import settings
@@ -210,3 +210,22 @@ async def get_logs(limit: int = 50, admin: Dict[str, Any] = Depends(get_current_
     """Get recent system activity logs."""
     logs = await db.get_logs(limit=limit)
     return logs
+
+
+@router.get("/images/{file_id}")
+async def get_drive_image(
+    file_id: str,
+    admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """Streams an image file from Google Drive for real-time TMA preview."""
+    try:
+        data = await gdrive_service.download_file_bytes(file_id)
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+    except Exception as e:
+        logger.error(f"Ошибка загрузки фото {file_id} для превью: {e}")
+        raise HTTPException(status_code=404, detail=f"Не удалось загрузить изображение: {str(e)}")
+
