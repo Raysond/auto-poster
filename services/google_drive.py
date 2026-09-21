@@ -61,7 +61,7 @@ class GoogleDriveService:
                 response = service.files().list(
                     q=query,
                     spaces="drive",
-                    fields="nextPageToken, files(id, name, mimeType, size)",
+                    fields="nextPageToken, files(id, name, mimeType, size, thumbnailLink)",
                     pageToken=page_token,
                     pageSize=100
                 ).execute()

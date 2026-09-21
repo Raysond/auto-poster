@@ -333,19 +333,22 @@ document.getElementById('btn-generate-preview').addEventListener('click', async 
 
   try {
     const preview = await api(`/api/channels/${channelId}/preview`, { method: 'POST' });
-    // Render real photos with fallback
-    const initData = tg?.initData || new URLSearchParams(window.location.search).get('initData') || '';
+    // Render real photos with dual fallback
     const gridClass = preview.photos.length === 1 ? 'album-grid single' : 'album-grid';
     elPreviewAlbumGrid.className = gridClass;
-    elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => `
-      <div class="album-photo-wrap">
-        <img src="/api/images/${p.id}?initData=${encodeURIComponent(initData)}"
-             alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
-             class="preview-photo-img"
-             loading="lazy"
-             onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'photo-placeholder\\'><span>🖼️</span><span style=\\'font-size:10px; margin-top:4px;\\'>${escapeHtml(p.name || 'Фото')}</span></div>';" />
-      </div>
-    `).join('');
+    elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => {
+      const primaryUrl = (p.thumbnailLink && p.thumbnailLink.replace(/=s\d+$/, '=s800')) || `/api/images/${p.id}`;
+      const fallbackUrl = `/api/images/${p.id}`;
+      return `
+        <div class="album-photo-wrap">
+          <img src="${primaryUrl}"
+               alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
+               class="preview-photo-img"
+               loading="lazy"
+               onerror="if(this.src !== '${fallbackUrl}'){ this.src = '${fallbackUrl}'; } else { this.onerror=null; this.parentElement.innerHTML='<div class=\\'photo-placeholder\\'><span>🖼️</span><span style=\\'font-size:10px; margin-top:4px;\\'>${escapeHtml(p.name || 'Фото')}</span></div>'; }" />
+        </div>
+      `;
+    }).join('');
 
     // Render HTML caption
     elPreviewCaption.innerHTML = preview.caption || '<i style="color:var(--hint-color)">Подпись отсутствует</i>';
