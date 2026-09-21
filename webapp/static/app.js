@@ -142,11 +142,8 @@ function renderChannels() {
         </div>
 
         <div class="channel-card-actions">
-          <button class="btn-primary-sm" onclick="triggerRefill(${ch.id})">
-            🔄 Пополнить (+3)
-          </button>
-          <button class="btn-ghost" onclick="triggerPostNow(${ch.id})">
-            🚀 Пост сейчас
+          <button class="btn-primary-sm" onclick="triggerPostNow(${ch.id})">
+            🚀 Опубликовать сейчас
           </button>
           <button class="btn-ghost" onclick="openChannelModal(${ch.id})">
             ⚙️ Настройки
