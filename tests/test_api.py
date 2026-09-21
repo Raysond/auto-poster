@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bot.main import create_fastapi_app
 from core.database import db
+from webapp.api.routes import get_current_admin
 
 
 @pytest.mark.asyncio
@@ -15,6 +16,8 @@ async def test_api_status_and_channels(tmp_path):
     await db.init_db()
 
     app = create_fastapi_app()
+    # Override authentication for test isolation
+    app.dependency_overrides[get_current_admin] = lambda: {"id": 1, "first_name": "Test Admin"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Status check

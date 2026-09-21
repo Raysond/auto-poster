@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from typing import List
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +40,27 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @field_validator("TELEGRAM_API_ID", mode="before")
+    @classmethod
+    def parse_api_id(cls, v):
+        if v is None or v == "" or (isinstance(v, str) and not v.strip()):
+            return None
+        return int(v)
+
+    @field_validator("TELEGRAM_API_HASH", mode="before")
+    @classmethod
+    def parse_api_hash(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return str(v).strip()
+
+    @field_validator("WEBAPP_PORT", mode="before")
+    @classmethod
+    def parse_webapp_port(cls, v):
+        if v is None or v == "" or (isinstance(v, str) and not v.strip()):
+            return 8080
+        return int(v)
 
     @property
     def admin_id_list(self) -> List[int]:
