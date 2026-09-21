@@ -56,7 +56,8 @@ def test_caption_assembly_and_length():
     assert caption.endswith("...")
 
 
-def test_queue_slot_calculations():
+@pytest.mark.asyncio
+async def test_queue_slot_calculations():
     """Verify calculating next scheduling slots for interval and exact_times modes."""
     qm = QueueManager()
 
@@ -65,18 +66,25 @@ def test_queue_slot_calculations():
         "schedule_mode": "interval",
         "interval_minutes": 180
     }
-    slots_interval = qm.calculate_next_time_slots(ch_interval, 3)
+    slots_interval = await qm.calculate_next_time_slots(ch_interval, 3)
     assert len(slots_interval) == 3
     # Check that slots are spaced ~180 minutes apart
     diff1 = (slots_interval[1] - slots_interval[0]).total_seconds() / 60
     assert abs(diff1 - 180) < 1
+
+    # Check anchor to existing queue
+    slots_after = await qm.calculate_next_time_slots(ch_interval, 2, existing_times=slots_interval)
+    assert len(slots_after) == 2
+    assert slots_after[0] > slots_interval[-1]
+    diff2 = (slots_after[0] - slots_interval[-1]).total_seconds() / 60
+    assert abs(diff2 - 180) < 1
 
     # 2. Exact times mode
     ch_exact = {
         "schedule_mode": "exact_times",
         "exact_times": "09:00,14:00,21:00"
     }
-    slots_exact = qm.calculate_next_time_slots(ch_exact, 3)
+    slots_exact = await qm.calculate_next_time_slots(ch_exact, 3)
     assert len(slots_exact) == 3
     assert slots_exact[0] < slots_exact[1] < slots_exact[2]
 

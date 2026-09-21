@@ -267,16 +267,35 @@ class Database:
             return cursor.lastrowid
 
     async def mark_queue_published(self, queue_id: int):
+        now_str = datetime.now().isoformat()
         async with self.get_connection() as conn:
             await conn.execute(
                 """
                 UPDATE scheduled_queue 
-                SET status = 'published', published_at = CURRENT_TIMESTAMP 
+                SET status = 'published', published_at = ? 
                 WHERE id = ?
                 """,
-                (queue_id,)
+                (now_str, queue_id)
             )
             await conn.commit()
+
+    async def get_last_published_time(self, channel_id: str) -> Optional[datetime]:
+        async with self.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT published_at FROM scheduled_queue 
+                WHERE channel_id = ? AND status = 'published' AND published_at IS NOT NULL
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(channel_id),)
+            )
+            row = await cursor.fetchone()
+            if row and row["published_at"]:
+                try:
+                    return datetime.fromisoformat(row["published_at"])
+                except Exception:
+                    return None
+            return None
 
     async def remove_from_queue(self, queue_id: int):
         async with self.get_connection() as conn:

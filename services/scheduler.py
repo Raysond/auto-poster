@@ -16,10 +16,10 @@ class BotScheduler:
 
     def start(self):
         """Start the background scheduler."""
-        # Check and refill buffer every 5 minutes
+        # Check and refill buffer every 30 seconds
         self.scheduler.add_job(
             self.job_check_queues,
-            trigger=IntervalTrigger(minutes=5),
+            trigger=IntervalTrigger(seconds=30),
             id="job_check_queues",
             name="Проверка и пополнение буфера отложки",
             replace_existing=True
@@ -80,6 +80,11 @@ class BotScheduler:
                         }
                         await publisher.publish_post_now(ch, post_data)
                         await db.mark_queue_published(item["id"])
+                        # Immediately top up buffer to maintain continuous cadence
+                        try:
+                            await queue_manager.refill_buffer(ch)
+                        except Exception as ref_err:
+                            logger.error(f"Ошибка пополнения буфера канала {channel_id} после публикации: {ref_err}")
                     except Exception as e:
                         logger.error(f"Ошибка публикации отложенного поста {item['id']}: {e}")
                         break

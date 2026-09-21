@@ -23,14 +23,34 @@ class QueueManager:
         queue = await db.get_channel_queue(channel_id)
         return len(queue)
 
-    def calculate_next_time_slots(self, channel: Dict[str, Any], count_needed: int) -> List[datetime]:
+    async def calculate_next_time_slots(
+        self,
+        channel: Dict[str, Any],
+        count_needed: int,
+        existing_times: Optional[List[datetime]] = None,
+        last_pub: Optional[datetime] = None
+    ) -> List[datetime]:
         """
         Calculates the next datetime slots for scheduling.
-        Supports both 'interval' mode (e.g. every 3 hours) and 'exact_times' mode (e.g. 10:00, 15:00, 20:00).
+        Supports both 'interval' mode (e.g. every 5 minutes) and 'exact_times' mode (e.g. 10:00, 15:00, 20:00).
+        Properly takes into account posts already in queue and the last published post.
         """
+        channel_id = str(channel.get("channel_id", ""))
         now = datetime.now()
         mode = channel.get("schedule_mode", "interval")
         slots: List[datetime] = []
+
+        # 1. Fetch currently pending scheduled times if not provided
+        if existing_times is None and channel_id:
+            existing_queue = await db.get_channel_queue(channel_id)
+            existing_times = []
+            for item in existing_queue:
+                try:
+                    existing_times.append(datetime.fromisoformat(item["scheduled_time"]))
+                except Exception:
+                    pass
+        elif existing_times is None:
+            existing_times = []
 
         if mode == "exact_times":
             times_str = channel.get("exact_times", "10:00,15:00,20:00")
@@ -48,23 +68,44 @@ class QueueManager:
             if not parsed_times:
                 parsed_times = [time(hour=10, minute=0), time(hour=15, minute=0), time(hour=20, minute=0)]
 
-            # Find upcoming occurrences starting from now
             current_day = now.date()
             while len(slots) < count_needed:
                 for t in parsed_times:
                     candidate = datetime.combine(current_day, t)
-                    # Must be at least 5 minutes in the future
-                    if candidate > now + timedelta(minutes=5):
-                        slots.append(candidate)
-                        if len(slots) == count_needed:
-                            break
+                    # Candidate must be in the future (> now + 30 seconds)
+                    if candidate <= now + timedelta(seconds=30):
+                        continue
+                    # Candidate must not already be in existing queue or in slots
+                    if any(abs((candidate - et).total_seconds()) < 120 for et in existing_times):
+                        continue
+                    if any(abs((candidate - s).total_seconds()) < 120 for s in slots):
+                        continue
+                    slots.append(candidate)
+                    if len(slots) == count_needed:
+                        break
                 current_day += timedelta(days=1)
 
         else:
-            # Interval mode (minutes)
-            interval = max(5, channel.get("interval_minutes", 180))
-            # Start from now + interval
-            last_time = now
+            # Interval mode (minutes) - allow minimum 1 minute
+            interval = max(1, channel.get("interval_minutes", 5))
+
+            # Determine anchor point:
+            if existing_times:
+                # Start after the latest post in the queue
+                anchor = max(existing_times)
+            else:
+                if last_pub is None and channel_id:
+                    last_pub = await db.get_last_published_time(channel_id)
+
+                if last_pub:
+                    candidate = last_pub
+                    while candidate + timedelta(minutes=interval) <= now:
+                        candidate += timedelta(minutes=interval)
+                    anchor = candidate
+                else:
+                    anchor = now
+
+            last_time = anchor
             for _ in range(count_needed):
                 last_time = last_time + timedelta(minutes=interval)
                 slots.append(last_time)
@@ -85,7 +126,7 @@ class QueueManager:
             return 0
 
         logger.info(f"Канал {channel.get('title', channel_id)}: в очереди {current_count}/{target}, пополняем на {needed} постов.")
-        slots = self.calculate_next_time_slots(channel, needed)
+        slots = await self.calculate_next_time_slots(channel, needed)
         scheduled_count = 0
 
         is_mtproto = await telethon_service.is_authorized()
