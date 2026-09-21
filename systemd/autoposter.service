@@ -1,0 +1,17 @@
+[Unit]
+Description=Auto-Poster Telegram Bot and TMA Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/auto-poster
+Environment="PATH=/opt/auto-poster/.venv/bin"
+ExecStart=/opt/auto-poster/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Auto-Poster Admin</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">🚀</div>
+        <div>
+          <h1 class="app-title">Auto-Poster</h1>
+          <p class="app-subtitle" id="connection-badge">Подключение к серверу...</p>
+        </div>
+      </div>
+      <button id="btn-refresh" class="btn-icon" title="Обновить данные">🔄</button>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-tab="tab-channels">
+        <span class="tab-icon">📢</span> Каналы
+      </button>
+      <button class="nav-tab" data-tab="tab-preview">
+        <span class="tab-icon">👁️</span> Превью
+      </button>
+      <button class="nav-tab" data-tab="tab-logs">
+        <span class="tab-icon">📜</span> Логи
+      </button>
+    </nav>
+
+    <!-- TAB 1: Channels -->
+    <section id="tab-channels" class="tab-content active">
+      <div class="section-actions">
+        <div class="section-title">Подключенные каналы</div>
+        <button id="btn-add-channel" class="btn-primary-sm">+ Добавить</button>
+      </div>
+
+      <div id="channels-list" class="channels-grid">
+        <div class="loading-spinner">Загрузка каналов...</div>
+      </div>
+    </section>
+
+    <!-- TAB 2: Preview -->
+    <section id="tab-preview" class="tab-content">
+      <div class="card">
+        <div class="card-title">Тестирование и генерация превью</div>
+        <p class="card-desc">Выберите канал для создания случайной комбинации фото, текста и плашки ссылки.</p>
+
+        <div class="form-group">
+          <label>Канал:</label>
+          <select id="preview-channel-select" class="form-control">
+            <option value="">-- Выберите канал --</option>
+          </select>
+        </div>
+
+        <button id="btn-generate-preview" class="btn-primary w-full">
+          🎲 Сгенерировать случайный пост
+        </button>
+      </div>
+
+      <div id="preview-result" class="preview-box hidden">
+        <div class="preview-header">
+          <span class="badge">Предпросмотр сообщения</span>
+          <span id="preview-photo-count" class="badge-accent">3 фото</span>
+        </div>
+        <div class="tg-bubble">
+          <div id="preview-album-grid" class="album-grid"></div>
+          <div id="preview-caption-text" class="tg-caption"></div>
+        </div>
+        <div class="preview-actions">
+          <button id="btn-publish-preview-now" class="btn-success w-full">
+            🚀 Опубликовать в канал сейчас
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: Logs & System Status -->
+    <section id="tab-logs" class="tab-content">
+      <div class="card">
+        <div class="card-title">Статус инфраструктуры</div>
+        <div class="status-grid">
+          <div class="status-item" id="status-gdrive">
+            <div class="status-indicator"></div>
+            <div>
+              <div class="status-label">Google Drive API</div>
+              <div class="status-val" id="gdrive-status-text">Проверка...</div>
+            </div>
+          </div>
+
+          <div class="status-item" id="status-mode">
+            <div class="status-indicator"></div>
+            <div>
+              <div class="status-label">Режим отложки</div>
+              <div class="status-val" id="mode-status-text">Определение...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="flex-between">
+          <div class="card-title">Журнал событий</div>
+          <button id="btn-clear-logs-view" class="btn-ghost-sm">Обновить</button>
+        </div>
+        <div id="logs-container" class="logs-list">
+          <div class="loading-spinner">Загрузка логов...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODAL: Add / Edit Channel -->
+    <div id="channel-modal" class="modal-backdrop hidden">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 id="modal-title" class="modal-title">Настройки канала</h3>
+          <button id="modal-close" class="btn-close">&times;</button>
+        </div>
+
+        <form id="channel-form" class="modal-body">
+          <input type="hidden" id="channel-db-id" value="">
+
+          <div class="form-group">
+            <label>Название канала:</label>
+            <input type="text" id="ch-title" class="form-control" placeholder="Мой новостной канал" required>
+          </div>
+
+          <div class="form-group">
+            <label>ID или @username канала:</label>
+            <input type="text" id="ch-channel-id" class="form-control" placeholder="-1001234567890 или @mychannel" required>
+            <small class="hint">Бот должен быть назначен администратором канала с правом публикации.</small>
+          </div>
+
+          <div class="form-divider">Google Drive источники</div>
+
+          <div class="form-group">
+            <label>ID папки с фото (Google Drive):</label>
+            <input type="text" id="ch-gdrive-folder" class="form-control" placeholder="1aBcDeFgHiJkLmNoP..." required>
+            <small class="hint">Папка, откуда бот берет случайные фото. Предоставьте доступ сервисному аккаунту!</small>
+          </div>
+
+          <div class="form-group">
+            <label>ID файла texts.txt (случайные фразы):</label>
+            <input type="text" id="ch-gdrive-texts" class="form-control" placeholder="1xYzAbCdEfGhIjKl...">
+            <small class="hint">1 строка = 1 текст. Перенос строки через \n.</small>
+          </div>
+
+          <div class="form-group">
+            <label>Постоянная плашка со ссылкой (футер):</label>
+            <textarea id="ch-footer-text" class="form-control" rows="2" placeholder='👉 <a href="https://t.me/channel">Подписаться</a>'></textarea>
+            <small class="hint">Прикрепляется внизу каждого сообщения. Поддерживает HTML.</small>
+          </div>
+
+          <div class="form-divider">Параметры публикации</div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Мин. фото:</label>
+              <input type="number" id="ch-photos-min" class="form-control" min="1" max="10" value="2">
+            </div>
+            <div class="form-group">
+              <label>Макс. фото:</label>
+              <input type="number" id="ch-photos-max" class="form-control" min="1" max="10" value="4">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Режим расписания:</label>
+            <select id="ch-schedule-mode" class="form-control">
+              <option value="interval">Каждые N минут/часов</option>
+              <option value="exact_times">Точные часы (10:00, 15:00...)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="group-interval">
+            <label>Интервал (в минутах):</label>
+            <input type="number" id="ch-interval" class="form-control" min="5" value="180">
+            <small class="hint">180 = каждые 3 часа. 360 = каждые 6 часов.</small>
+          </div>
+
+          <div class="form-group hidden" id="group-exact-times">
+            <label>Точные часы публикации:</label>
+            <input type="text" id="ch-exact-times" class="form-control" placeholder="10:00,15:00,20:00">
+            <small class="hint">Через запятую в формате ЧЧ:ММ.</small>
+          </div>
+
+          <div class="form-group">
+            <label>Целевой буфер отложки (постов):</label>
+            <input type="number" id="ch-buffer-target" class="form-control" min="1" max="10" value="3">
+            <small class="hint">Бот будет постоянно держать 3 поста в очереди вперед.</small>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" id="ch-is-active" checked>
+              <span>Канал активен (автопостинг включен)</span>
+            </label>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" id="btn-delete-channel" class="btn-danger hidden">Удалить</button>
+            <div class="flex-end">
+              <button type="button" id="modal-cancel" class="btn-ghost">Отмена</button>
+              <button type="submit" class="btn-primary">Сохранить</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

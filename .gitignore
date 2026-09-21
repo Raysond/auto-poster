@@ -1,0 +1,30 @@
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Sensitive credentials & environment
+.env
+credentials/*.json
+!credentials/google-service-account.json.example
+*.session
+*.session-journal
+
+# Data & logs
+data/
+*.db
+*.sqlite3
+logs/
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

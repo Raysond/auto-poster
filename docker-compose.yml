@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  autoposter:
+    build: .
+    container_name: autoposter_bot
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./credentials:/app/credentials
+      - ./.env:/app/.env
+    environment:
+      - PYTHONUNBUFFERED=1
