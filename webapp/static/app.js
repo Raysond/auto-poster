@@ -64,6 +64,8 @@ const elModalCancel = document.getElementById('modal-cancel');
 const elChannelForm = document.getElementById('channel-form');
 const elBtnDeleteChannel = document.getElementById('btn-delete-channel');
 const elBtnAddChannel = document.getElementById('btn-add-channel');
+const elGroupCopyFrom = document.getElementById('group-copy-from');
+const elCopySourceSelect = document.getElementById('ch-copy-source');
 
 // Tab Navigation
 elTabs.forEach(tab => {
@@ -181,17 +183,6 @@ window.triggerPostNow = async function(id) {
     notify(err.message, 'error');
   }
 };
-
-// Modal Elements
-const elModal = document.getElementById('channel-modal');
-const elModalTitle = document.getElementById('modal-title');
-const elModalClose = document.getElementById('modal-close');
-const elModalCancel = document.getElementById('modal-cancel');
-const elChannelForm = document.getElementById('channel-form');
-const elBtnDeleteChannel = document.getElementById('btn-delete-channel');
-const elBtnAddChannel = document.getElementById('btn-add-channel');
-const elGroupCopyFrom = document.getElementById('group-copy-from');
-const elCopySourceSelect = document.getElementById('ch-copy-source');
 
 // Copy settings from donor channel event
 if (elCopySourceSelect) {
