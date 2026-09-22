@@ -207,6 +207,17 @@ class Database:
             await conn.execute("DELETE FROM used_photos WHERE channel_id = ?", (str(channel_id),))
             await conn.commit()
 
+    async def unmark_photos(self, channel_id: str, photo_ids: List[str]):
+        if not photo_ids:
+            return
+        async with self.get_connection() as conn:
+            for pid in photo_ids:
+                await conn.execute(
+                    "DELETE FROM used_photos WHERE channel_id = ? AND photo_file_id = ?",
+                    (str(channel_id), str(pid))
+                )
+            await conn.commit()
+
     async def get_used_text_hashes(self, channel_id: str) -> set[str]:
         async with self.get_connection() as conn:
             cursor = await conn.execute(
@@ -221,6 +232,17 @@ class Database:
         async with self.get_connection() as conn:
             await conn.execute(
                 "INSERT OR IGNORE INTO used_texts (channel_id, text_hash) VALUES (?, ?)",
+                (str(channel_id), thash)
+            )
+            await conn.commit()
+
+    async def unmark_text(self, channel_id: str, text: str):
+        if not text:
+            return
+        thash = get_text_hash(text)
+        async with self.get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM used_texts WHERE channel_id = ? AND text_hash = ?",
                 (str(channel_id), thash)
             )
             await conn.commit()
@@ -290,6 +312,18 @@ class Database:
             )
             await conn.commit()
 
+    async def mark_queue_failed(self, queue_id: int):
+        async with self.get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE scheduled_queue 
+                SET status = 'failed' 
+                WHERE id = ?
+                """,
+                (queue_id,)
+            )
+            await conn.commit()
+
     async def get_last_published_time(self, channel_id: str) -> Optional[datetime]:
         async with self.get_connection() as conn:
             cursor = await conn.execute(
@@ -311,6 +345,20 @@ class Database:
     async def remove_from_queue(self, queue_id: int):
         async with self.get_connection() as conn:
             await conn.execute("DELETE FROM scheduled_queue WHERE id = ?", (queue_id,))
+            await conn.commit()
+
+    async def clear_channel_queue(self, channel_id: str, status: Optional[str] = None):
+        async with self.get_connection() as conn:
+            if status:
+                await conn.execute(
+                    "DELETE FROM scheduled_queue WHERE channel_id = ? AND status = ?",
+                    (str(channel_id), status)
+                )
+            else:
+                await conn.execute(
+                    "DELETE FROM scheduled_queue WHERE channel_id = ? AND status IN ('pending_native', 'pending_local')",
+                    (str(channel_id),)
+                )
             await conn.commit()
 
     # --- Activity Logs ---

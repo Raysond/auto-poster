@@ -5,7 +5,6 @@ from core.config import settings
 from core.database import db
 from services.google_drive import gdrive_service
 from services.queue_manager import queue_manager
-from services.telethon_client import telethon_service
 
 router = Router()
 
@@ -48,14 +47,12 @@ async def cmd_status(message: types.Message):
 
     channels = await db.get_all_channels()
     gdrive_ok, gdrive_msg = await gdrive_service.check_connection()
-    telethon_auth = await telethon_service.is_authorized()
 
     text = "📊 <b>Статус системы Auto-Poster:</b>\n\n"
     text += f"• <b>Google Drive API:</b> {'✅ Подключен' if gdrive_ok else '❌ Ошибка'}\n"
     text += f"  <i>({gdrive_msg})</i>\n\n"
 
-    mode_str = "✅ Нативная отложка Telegram (MTProto Cloud)" if telethon_auth else "ℹ️ Локальный буфер (Bot API)"
-    text += f"• <b>Режим буфера:</b> {mode_str}\n"
+    text += "• <b>Режим буфера:</b> ℹ️ Очередь публикаций (Telegram Bot API)\n"
     text += f"• <b>Подключенных каналов:</b> {len(channels)}\n\n"
 
     if channels:

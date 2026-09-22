@@ -14,8 +14,8 @@ from core.config import settings
 from core.database import db
 from bot.handlers import common, admin
 from services.publisher import publisher
+from services.queue_manager import queue_manager
 from services.scheduler import bot_scheduler
-from services.telethon_client import telethon_service
 from webapp.api.routes import router as api_router
 
 # Logging setup
@@ -98,15 +98,11 @@ async def main():
         )
         publisher.set_bot(bot)
 
-    # 4. Telethon check (optional MTProto)
-    if telethon_service.is_configured():
-        logger.info("Обнаружены учетные данные Telethon. Проверяем авторизацию MTProto...")
-        if await telethon_service.is_authorized():
-            logger.info("✅ Telethon MTProto авторизован. Включен режим нативной отложки Telegram!")
-        else:
-            logger.info("ℹ️ Telethon настроен, но сессия не авторизована. Запустите скрипт scripts/login_telethon.py для входа.")
-    else:
-        logger.info("ℹ️ Telethon не настроен. Работает режим локального буфера через стандартный Bot API.")
+    # 4. Ensure any inactive channels have clean empty queues
+    channels = await db.get_all_channels()
+    for ch in channels:
+        if not ch.get("is_active"):
+            await queue_manager.recreate_queue(ch)
 
     # 5. Start background scheduler
     bot_scheduler.start()

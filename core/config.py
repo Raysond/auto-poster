@@ -27,33 +27,11 @@ class Settings(BaseSettings):
     # Database
     DATABASE_PATH: str = Field(default="data/autoposter.db", description="Path to SQLite database")
 
-    # Optional MTProto (Telethon) for native Telegram Cloud scheduled messages (schedule_date)
-    TELEGRAM_API_ID: int | None = Field(default=None, description="Telegram API ID from my.telegram.org")
-    TELEGRAM_API_HASH: str | None = Field(default=None, description="Telegram API Hash from my.telegram.org")
-    TELETHON_SESSION_NAME: str = Field(
-        default="data/admin_session",
-        description="Path/name of Telethon session file"
-    )
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
-
-    @field_validator("TELEGRAM_API_ID", mode="before")
-    @classmethod
-    def parse_api_id(cls, v):
-        if v is None or v == "" or (isinstance(v, str) and not v.strip()):
-            return None
-        return int(v)
-
-    @field_validator("TELEGRAM_API_HASH", mode="before")
-    @classmethod
-    def parse_api_hash(cls, v):
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return None
-        return str(v).strip()
 
     @field_validator("WEBAPP_PORT", mode="before")
     @classmethod

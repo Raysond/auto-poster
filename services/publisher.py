@@ -6,7 +6,6 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto
 from core.database import db
 from services.post_builder import post_builder
-from services.telethon_client import telethon_service
 
 logger = logging.getLogger(__name__)
 
@@ -83,52 +82,6 @@ class Publisher:
             logger.error(err_msg)
             await db.add_log(err_msg, level="ERROR", channel_id=channel_id)
             raise e
-
-    async def schedule_post_native(
-        self,
-        channel: Dict[str, Any],
-        schedule_date: datetime,
-        post_data: Optional[Dict[str, Any]] = None
-    ) -> bool:
-        """
-        Schedules a post into Telegram's cloud via Telethon MTProto.
-        100% resilient against server internet downtime.
-        """
-        channel_id = channel["channel_id"]
-
-        if not post_data:
-            post_data = await post_builder.build_post(channel)
-
-        photos_data = await post_builder.download_post_images(post_data["photo_files"])
-        caption = post_data["caption"]
-
-        success = await telethon_service.schedule_album(
-            channel_id=channel_id,
-            photos=photos_data,
-            caption=caption,
-            schedule_date=schedule_date
-        )
-
-        if success:
-            await db.mark_photos_as_used(channel_id, post_data["photo_ids"])
-            if post_data.get("raw_text"):
-                await db.mark_text_as_used(channel_id, post_data["raw_text"])
-
-            await db.add_to_queue(
-                channel_id=channel_id,
-                scheduled_time=schedule_date,
-                caption=caption,
-                photo_ids=post_data["photo_ids"],
-                status="pending_native"
-            )
-
-            await db.add_log(
-                f"Добавлен пост в облачную отложку Telegram для {channel.get('title', channel_id)} на {schedule_date.strftime('%Y-%m-%d %H:%M')}",
-                level="INFO",
-                channel_id=channel_id
-            )
-
-        return success
 
 
 # Global publisher instance

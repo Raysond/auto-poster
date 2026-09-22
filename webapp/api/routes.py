@@ -8,7 +8,6 @@ from services.google_drive import gdrive_service
 from services.post_builder import post_builder
 from services.publisher import publisher
 from services.queue_manager import queue_manager
-from services.telethon_client import telethon_service
 from webapp.api.auth import validate_telegram_init_data
 
 logger = logging.getLogger(__name__)
@@ -51,11 +50,11 @@ class ChannelUpdate(BaseModel):
 
 
 async def fetch_telegram_channel_title(channel_id: str) -> Optional[str]:
-    """Fetch chat/channel title via Bot API or Telethon MTProto."""
+    """Fetch chat/channel title via Bot API."""
     cleaned = str(channel_id).strip()
     target: str | int = int(cleaned) if cleaned.lstrip("-").isdigit() else cleaned
 
-    # 1. Try via aiogram bot instance
+    # Try via aiogram bot instance
     if publisher.bot:
         try:
             chat = await publisher.bot.get_chat(target)
@@ -63,17 +62,6 @@ async def fetch_telegram_channel_title(channel_id: str) -> Optional[str]:
                 return chat.title
         except Exception as e:
             logger.warning(f"Не удалось получить название канала {channel_id} через бота: {e}")
-
-    # 2. Try via Telethon if authorized
-    if await telethon_service.is_authorized():
-        try:
-            client = await telethon_service.get_client()
-            if client:
-                entity = await client.get_entity(target)
-                if hasattr(entity, "title") and entity.title:
-                    return entity.title
-        except Exception as e:
-            logger.warning(f"Не удалось получить название канала {channel_id} через Telethon: {e}")
 
     return None
 
@@ -102,7 +90,6 @@ def get_current_admin(
 async def get_system_status(admin: Dict[str, Any] = Depends(get_current_admin)):
     """System health check and connection status."""
     gdrive_ok, gdrive_msg = await gdrive_service.check_connection()
-    telethon_authorized = await telethon_service.is_authorized()
     channels = await db.get_all_channels()
 
     return {
@@ -111,10 +98,9 @@ async def get_system_status(admin: Dict[str, Any] = Depends(get_current_admin)):
             "connected": gdrive_ok,
             "message": gdrive_msg
         },
-        "telethon_mtproto": {
-            "configured": telethon_service.is_configured(),
-            "authorized": telethon_authorized,
-            "mode": "native_cloud_schedule" if telethon_authorized else "bot_api_local_schedule"
+        "publisher": {
+            "mode": "bot_api_local_schedule",
+            "bot_connected": bool(publisher.bot)
         },
         "channels_count": len(channels),
         "admin": admin.get("first_name", "Admin")
@@ -198,8 +184,69 @@ async def update_channel(
         else:
             del update_dict["title"]
 
+    publication_fields = [
+        "gdrive_folder_id",
+        "gdrive_texts_file_id",
+        "gdrive_footer_file_id",
+        "footer_text",
+        "photos_min",
+        "photos_max",
+        "schedule_mode",
+        "interval_minutes",
+        "exact_times",
+        "posts_per_day",
+        "buffer_target",
+    ]
+
+    def is_field_changed(field: str) -> bool:
+        if field not in update_dict:
+            return False
+        new_val = update_dict[field]
+        old_val = ch.get(field)
+        if isinstance(new_val, (int, float)):
+            try:
+                return int(new_val) != int(old_val)
+            except (ValueError, TypeError):
+                return True
+        if isinstance(new_val, bool):
+            return bool(new_val) != bool(old_val)
+        return str(new_val or "").strip() != str(old_val or "").strip()
+
+    params_changed = any(is_field_changed(f) for f in publication_fields)
+    active_toggled = "is_active" in update_dict and bool(update_dict["is_active"]) != bool(ch.get("is_active"))
+
     await db.update_channel(channel_db_id, update_dict)
-    await db.add_log(f"Обновлены настройки канала {ch['title']}", level="INFO")
+
+    if active_toggled or params_changed:
+        updated_ch = await db.get_channel_by_id(channel_db_id)
+        if updated_ch:
+            try:
+                count = await queue_manager.recreate_queue(updated_ch)
+                if not updated_ch.get("is_active"):
+                    await db.add_log(
+                        f"Канал {updated_ch['title']} отключен. Отложка сброшена в 0.",
+                        level="INFO",
+                        channel_id=str(updated_ch["channel_id"])
+                    )
+                    return {"message": "Канал отключен. Отложенные посты сняты (отложка 0)."}
+                else:
+                    await db.add_log(
+                        f"Параметры/статус канала {updated_ch['title']} обновлены. Очередь пересоздана ({count} постов).",
+                        level="INFO",
+                        channel_id=str(updated_ch["channel_id"])
+                    )
+                    return {"message": f"Настройки сохранены. Очередь пересоздана ({count} постов)."}
+            except Exception as e:
+                logger.error(f"Ошибка обновления очереди для {updated_ch['title']}: {e}")
+                await db.add_log(
+                    f"Ошибка обновления очереди: {str(e)}",
+                    level="ERROR",
+                    channel_id=str(updated_ch["channel_id"])
+                )
+                return {"message": "Настройки сохранены, но возникла ошибка при обновлении очереди."}
+    else:
+        await db.add_log(f"Обновлены настройки канала {ch['title']}", level="INFO")
+
     return {"message": "Настройки канала успешно сохранены."}
 
 
@@ -262,6 +309,32 @@ async def refill_channel_buffer(channel_db_id: int, admin: Dict[str, Any] = Depe
         return {"message": f"Отложка пополнена. Добавлено новых постов: {added}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка пополнения отложки: {str(e)}")
+
+
+@router.post("/channels/{channel_db_id}/recreate")
+async def recreate_channel_queue_endpoint(
+    channel_db_id: int,
+    admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """Clear and recreate all pending scheduled posts for the channel."""
+    ch = await db.get_channel_by_id(channel_db_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Канал не найден.")
+
+    if not ch.get("is_active"):
+        return {"message": "Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенные посты."}
+
+    try:
+        count = await queue_manager.recreate_queue(ch)
+        await db.add_log(
+            f"Очередь постов канала {ch['title']} пересоздана вручную ({count} постов).",
+            level="INFO",
+            channel_id=str(ch["channel_id"])
+        )
+        return {"message": f"Очередь успешно пересоздана! Сформировано новых постов: {count}"}
+    except Exception as e:
+        logger.error(f"Ошибка ручного пересоздания очереди для {ch['title']}: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка пересоздания очереди: {str(e)}")
 
 
 @router.get("/logs")

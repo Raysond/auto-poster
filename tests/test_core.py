@@ -158,6 +158,75 @@ async def test_database_lifecycle(tmp_path):
     queue_after = await db.get_channel_queue("-1001234567890")
     assert len(queue_after) == 0
 
+    # 5. Test unmark_photos and clear_channel_queue
+    await db.mark_photos_as_used("-1001234567890", ["img_a", "img_b"])
+    used_before = await db.get_used_photo_ids("-1001234567890")
+    assert "img_a" in used_before and "img_b" in used_before
+
+    await db.unmark_photos("-1001234567890", ["img_a"])
+    used_after = await db.get_used_photo_ids("-1001234567890")
+    assert "img_a" not in used_after
+    assert "img_b" in used_after
+
+    await db.add_to_queue(
+        channel_id="-1001234567890",
+        scheduled_time=datetime.now() + timedelta(hours=1),
+        caption="Пост 2",
+        photo_ids=["img_b"],
+        status="pending_local"
+    )
+    assert len(await db.get_channel_queue("-1001234567890")) == 1
+    await db.clear_channel_queue("-1001234567890")
+    assert len(await db.get_channel_queue("-1001234567890")) == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_manager_recreate_queue(tmp_path):
+    """Test recreate_queue clears old pending items and refills buffer."""
+    from core.database import db
+    from services.queue_manager import queue_manager
+    db.db_path = str(tmp_path / "test_qm_recreate.db")
+    await db.init_db()
+
+    ch_id = await db.create_channel({
+        "channel_id": "-100555",
+        "title": "Recreate Test",
+        "gdrive_folder_id": "folder1",
+        "interval_minutes": 60,
+        "schedule_mode": "interval",
+        "buffer_target": 2,
+        "is_active": True
+    })
+    ch = await db.get_channel_by_id(ch_id)
+
+    # Put a dummy post in queue
+    await db.add_to_queue(
+        channel_id="-100555",
+        scheduled_time=datetime.now() + timedelta(hours=5),
+        caption="Old Post",
+        photo_ids=["old_photo_1"],
+        status="pending_local"
+    )
+    assert len(await db.get_channel_queue("-100555")) == 1
+
+    # Mock post_builder
+    with patch("services.queue_manager.post_builder.build_post") as mock_build:
+        mock_build.return_value = {
+            "caption": "New Post",
+            "photo_ids": ["new_photo_1"],
+            "photo_files": [{"id": "new_photo_1"}],
+            "raw_text": ""
+        }
+
+        # Change interval and recreate queue
+        ch["interval_minutes"] = 15
+        added = await queue_manager.recreate_queue(ch)
+
+        assert added == 2
+        queue = await db.get_channel_queue("-100555")
+        assert len(queue) == 2
+        assert all(item["caption"] == "New Post" for item in queue)
+
 
 @pytest.mark.asyncio
 async def test_post_builder_mock(tmp_path):

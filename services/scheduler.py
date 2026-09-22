@@ -5,7 +5,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 from core.database import db
 from services.queue_manager import queue_manager
 from services.publisher import publisher
-from services.telethon_client import telethon_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class BotScheduler:
             replace_existing=True
         )
 
-        # Check local queue every 30 seconds for Bot API fallback publishing
+        # Check local queue every 30 seconds for Bot API publishing
         self.scheduler.add_job(
             self.job_process_local_queue,
             trigger=IntervalTrigger(seconds=30),
@@ -52,13 +51,8 @@ class BotScheduler:
 
     async def job_process_local_queue(self):
         """
-        If Telethon is not in use, this job publishes posts from the local SQLite queue
-        whose scheduled_time has arrived.
+        Publishes posts from the local SQLite queue whose scheduled_time has arrived.
         """
-        # If Telethon MTProto is active, Telegram cloud publishes native messages automatically!
-        if await telethon_service.is_authorized():
-            return
-
         now_iso = datetime.now().isoformat()
         channels = await db.get_active_channels()
 
@@ -87,6 +81,12 @@ class BotScheduler:
                             logger.error(f"Ошибка пополнения буфера канала {channel_id} после публикации: {ref_err}")
                     except Exception as e:
                         logger.error(f"Ошибка публикации отложенного поста {item['id']}: {e}")
+                        await db.mark_queue_failed(item["id"])
+                        await db.add_log(
+                            f"Пост {item['id']} снят с публикации из-за ошибки: {str(e)}",
+                            level="ERROR",
+                            channel_id=channel_id
+                        )
                         break
 
 

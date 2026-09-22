@@ -17,10 +17,10 @@
 - **Мульти-канальность:**
   - Поддержка неограниченного числа каналов.
   - Для каждого канала можно задать свою папку с фото (или одну общую), свой файл текстов, индивидуальное расписание и число фото на пост (например, 2–4).
-- **🛡️ Защита от обрывов интернета на сервере (Буфер 3 поста в отложке):**
-  - Бот всегда держит очередь из 3 постов вперед.
-  - **Режим нативной отложки Telegram (MTProto / Telethon):** посты заранее отправляются в облачную отложку Telegram с точным временем публикации (`schedule_date`). Даже если сервер Debian полностью потеряет связь на сутки или отключится электричество — **Telegram сам опубликует посты минута в минуту!**
-  - **Режим Bot API:** если аккаунт MTProto не подключен, бот держит 3 предзагруженных поста в локальном буфере SQLite, защищая от сбоев Google Drive.
+- **🛡️ Локальный буфер и планировщик публикаций:**
+  - Бот всегда держит очередь из предзагруженных постов вперед (по умолчанию 3 поста).
+  - Посты хранятся в локальной базе данных SQLite со статусом `pending_local` и защищают от кратковременных сбоев или задержек Google Drive.
+  - Фоновый планировщик APScheduler регулярно проверяет очередь и публикует наступившие посты минута в минуту через официальный Telegram Bot API (`send_media_group` / `send_photo`).
 - **📱 Telegram Mini App (TMA):**
   - Управление каналами без выхода из Telegram: вызовите `/admin` и нажмите кнопку.
   - Добавление и удаление каналов, настройка расписания (каждые N минут или точные часы).
@@ -45,15 +45,12 @@ auto-poster/
 ├── services/
 │   ├── google_drive.py    # Google Drive API (Service Account, стриминг фото и чтение текстов)
 │   ├── post_builder.py    # Сборка случайного поста, учет использованных фото, лимит 1024 симв.
-│   ├── queue_manager.py   # Контроль буфера из 3 постов в отложке
-│   ├── telethon_client.py # MTProto клиент для нативной отложки Telegram
-│   ├── publisher.py       # Отправка альбомов через Bot API или Telethon
+│   ├── queue_manager.py   # Контроль буфера постов в отложке
+│   ├── publisher.py       # Отправка альбомов через Bot API
 │   └── scheduler.py       # Фоновый планировщик APScheduler (проверка очереди и отправка)
 ├── webapp/                # Telegram Mini App
 │   ├── api/routes.py      # REST API для админ-панели (валидация initData)
 │   └── static/            # Frontend (HTML5, CSS переменные темы Telegram, JavaScript)
-├── scripts/
-│   └── login_telethon.py  # Разовая интерактивная авторизация для нативной облачной отложки
 ├── systemd/
 │   └── autoposter.service # Unit-файл службы для автозапуска на Debian 13
 ├── credentials/
@@ -124,21 +121,7 @@ WEBAPP_URL=http://localhost:8080
 ```
 *(Для работы Telegram Mini App внутри мобильного Telegram нужен валидный HTTPS. Во время локальной разработки используйте туннель: `cloudflared tunnel --url http://localhost:8080` или `ngrok http 8080` и укажите полученный https-адрес в `WEBAPP_URL`).*
 
-### 6. [Опционально] Настройка нативной облачной отложки (Telethon MTProto)
-Если вы хотите 100% защиту от отключения сервера:
-1. Зайдите на [my.telegram.org](https://my.telegram.org) -> **API development tools**.
-2. Скопируйте `App api_id` и `App api_hash` в `.env`:
-   ```ini
-   TELEGRAM_API_ID=1234567
-   TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
-   ```
-3. Выполните разовый вход в терминале:
-   ```powershell
-   python -m scripts.login_telethon
-   ```
-   Введите номер телефона и код из Telegram. Сессия сохранится локально в `data/admin_session.session`.
-
-### 7. Запуск проекта
+### 6. Запуск проекта
 ```powershell
 python -m bot.main
 ```
@@ -174,7 +157,6 @@ python -m bot.main
 4. **Копирование ключей и .env:**
    - Поместите `credentials/google-service-account.json`.
    - Заполните `.env` (укажите реальный домен или внешний IP с HTTPS).
-   - Если используется Telethon, скопируйте файл сессии `data/admin_session.session` или запустите `python3 -m scripts.login_telethon`.
 
 5. **Установка systemd unit:**
    ```bash

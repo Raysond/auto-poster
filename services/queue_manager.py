@@ -4,7 +4,6 @@ from typing import Dict, Any, List, Optional
 from core.database import db
 from services.post_builder import post_builder
 from services.publisher import publisher
-from services.telethon_client import telethon_service
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +11,12 @@ logger = logging.getLogger(__name__)
 class QueueManager:
     async def get_current_buffer_count(self, channel: Dict[str, Any]) -> int:
         """
-        Returns the number of scheduled posts currently waiting in queue.
-        If Telethon is authorized, checks Telegram Cloud native schedule.
-        Otherwise checks SQLite local queue.
+        Returns the number of scheduled posts currently waiting in SQLite local queue.
+        If channel is paused / inactive, always returns 0.
         """
+        if not channel.get("is_active"):
+            return 0
         channel_id = str(channel["channel_id"])
-        if await telethon_service.is_authorized():
-            return await telethon_service.get_native_scheduled_count(channel_id)
-
         queue = await db.get_channel_queue(channel_id)
         return len(queue)
 
@@ -153,23 +150,18 @@ class QueueManager:
         slots = await self.calculate_next_time_slots(channel, needed)
         scheduled_count = 0
 
-        is_mtproto = await telethon_service.is_authorized()
-
         for slot in slots:
             try:
                 post_data = await post_builder.build_post(channel)
-                if is_mtproto:
-                    # Native Telegram Cloud scheduling
-                    await publisher.schedule_post_native(channel, schedule_date=slot, post_data=post_data)
-                else:
-                    # Pre-buffer in local database
-                    await db.add_to_queue(
-                        channel_id=channel_id,
-                        scheduled_time=slot,
-                        caption=post_data["caption"],
-                        photo_ids=post_data["photo_ids"],
-                        status="pending_local"
-                    )
+                # Pre-buffer in local database and mark photos to avoid duplicate picks
+                await db.mark_photos_as_used(channel_id, post_data["photo_ids"])
+                await db.add_to_queue(
+                    channel_id=channel_id,
+                    scheduled_time=slot,
+                    caption=post_data["caption"],
+                    photo_ids=post_data["photo_ids"],
+                    status="pending_local"
+                )
                 scheduled_count += 1
             except Exception as e:
                 logger.error(f"Не удалось подготовить пост для канала {channel_id} на {slot}: {e}")
@@ -177,6 +169,29 @@ class QueueManager:
                 break
 
         return scheduled_count
+
+    async def recreate_queue(self, channel: Dict[str, Any]) -> int:
+        """
+        Clears existing pending local queue and refills
+        it according to current schedule settings.
+        Returns number of newly scheduled posts.
+        """
+        channel_id = str(channel["channel_id"])
+        logger.info(f"Пересоздание очереди для канала {channel.get('title', channel_id)}...")
+
+        # 1. Retrieve pending items to unmark used media/texts
+        existing_queue = await db.get_channel_queue(channel_id)
+        for item in existing_queue:
+            if item.get("photo_ids"):
+                await db.unmark_photos(channel_id, item["photo_ids"])
+
+        # 2. Clear database queue records
+        await db.clear_channel_queue(channel_id)
+
+        # 4. If channel is active, immediately refill buffer
+        if channel.get("is_active", True):
+            return await self.refill_buffer(channel)
+        return 0
 
     async def check_and_refill_all_active_channels(self):
         """Iterates over all active channels and tops up their queues."""

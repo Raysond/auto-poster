@@ -105,9 +105,9 @@ function renderChannels() {
 
   elChannelsList.innerHTML = channels.map(ch => {
     const isAct = !!ch.is_active;
-    const bufCount = ch.current_buffer || 0;
+    const bufCount = isAct ? (ch.current_buffer || 0) : 0;
     const bufTarget = ch.buffer_target || 3;
-    const bufBadgeClass = bufCount >= bufTarget ? 'badge-active' : 'badge-buffer';
+    const bufBadgeClass = !isAct ? 'badge-buffer' : (bufCount >= bufTarget ? 'badge-active' : 'badge-buffer');
 
     let scheduleText = '';
     if (ch.schedule_mode === 'exact_times') {
@@ -145,8 +145,8 @@ function renderChannels() {
           <div class="meta-pill">
             <span>🖼️</span> ${ch.photos_min}–${ch.photos_max} фото
           </div>
-          <div class="meta-pill ${bufBadgeClass}">
-            <span>📦</span> Отложка: <b>${bufCount} / ${bufTarget}</b>
+          <div class="meta-pill ${bufBadgeClass} meta-pill-clickable" onclick="triggerRecreateQueue(${ch.id})" title="Нажмите, чтобы пересоздать посты в отложке">
+            <span>📦</span> Отложка: <b>${bufCount} / ${bufTarget}</b> <span class="pill-action-icon">🔄</span>
           </div>
         </div>
 
@@ -170,13 +170,13 @@ window.toggleChannelActive = async function(id, isActive) {
     label.className = `channel-toggle-label ${isActive ? 'active' : 'paused'}`;
   }
   try {
-    await api(`/api/channels/${id}`, {
+    const res = await api(`/api/channels/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ is_active: isActive })
     });
-    const ch = channels.find(c => c.id === id);
-    if (ch) ch.is_active = isActive;
     if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    await loadChannels();
+    notify(res.message);
   } catch (err) {
     if (label) {
       label.textContent = !isActive ? 'Активен' : 'Пауза';
@@ -194,6 +194,24 @@ function populatePreviewSelect() {
 }
 
 // --- Trigger Actions ---
+window.triggerRecreateQueue = async function(id) {
+  const ch = channels.find(c => c.id === id);
+  const title = ch ? ch.title : 'канала';
+  if (ch && !ch.is_active) {
+    notify('Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенные посты.', 'warning');
+    return;
+  }
+  if (!confirm(`Пересоздать все посты в отложке для «${title}»?`)) return;
+  try {
+    const res = await api(`/api/channels/${id}/recreate`, { method: 'POST' });
+    notify(res.message);
+    if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    await loadChannels();
+  } catch (err) {
+    notify('Ошибка: ' + err.message, 'error');
+  }
+};
+
 window.triggerRefill = async function(id) {
   try {
     const res = await api(`/api/channels/${id}/refill`, { method: 'POST' });
@@ -595,13 +613,8 @@ async function loadStatusAndLogs() {
     }
 
     // Schedule mode
-    if (status.telethon_mtproto.authorized) {
-      elModeStatus.textContent = 'Нативная отложка Telegram (MTProto Cloud)';
-      elIndicatorMode.className = 'status-indicator ok';
-    } else {
-      elModeStatus.textContent = 'Локальный кэш-буфер (Bot API)';
-      elIndicatorMode.className = 'status-indicator';
-    }
+    elModeStatus.textContent = 'Очередь публикаций (Telegram Bot API)';
+    elIndicatorMode.className = 'status-indicator ok';
 
     elConnectionBadge.textContent = `Подключено (${status.admin})`;
 

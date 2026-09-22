@@ -63,9 +63,19 @@ class PostBuilder:
         # 3. Get fixed footer / link plate
         footer = await gdrive_service.get_footer(channel)
 
-        # 4. Assemble caption
+        # 4. Assemble caption (respecting Telegram's 1024 char limit for media captions)
+        separator = "\n\n" if (selected_text and footer) else ""
+        combined_len = len(selected_text) + len(separator) + len(footer)
+        if combined_len > MAX_CAPTION_LENGTH:
+            allowed_text_len = MAX_CAPTION_LENGTH - len(separator) - len(footer)
+            if allowed_text_len > 3:
+                selected_text = selected_text[:allowed_text_len - 3] + "..."
+            else:
+                selected_text = ""
+                separator = ""
+
         if selected_text and footer:
-            full_caption = f"{selected_text}\n\n{footer}"
+            full_caption = f"{selected_text}{separator}{footer}"
         elif selected_text:
             full_caption = selected_text
         elif footer:
@@ -73,12 +83,7 @@ class PostBuilder:
         else:
             full_caption = ""
 
-        # Validate 1024 characters limit
         if len(full_caption) > MAX_CAPTION_LENGTH:
-            logger.warning(
-                f"Подпись превышает {MAX_CAPTION_LENGTH} символов ({len(full_caption)}). "
-                "Обрезаем подпись до допустимого лимита."
-            )
             full_caption = full_caption[:MAX_CAPTION_LENGTH - 3] + "..."
 
         return {

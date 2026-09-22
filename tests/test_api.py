@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from unittest.mock import patch, AsyncMock
 import pytest
 from httpx import AsyncClient, ASGITransport
 
@@ -26,7 +27,7 @@ async def test_api_status_and_channels(tmp_path):
         data = response.json()
         assert data["status"] == "ok"
         assert "google_drive" in data
-        assert "telethon_mtproto" in data
+        assert "publisher" in data
 
         # Create channel
         new_channel = {
@@ -54,21 +55,56 @@ async def test_api_status_and_channels(tmp_path):
         assert len(channels) == 1
         assert channels[0]["title"] == "API Test Channel"
 
-        # Update channel: change title and toggle is_active to False
+        # Put a post in queue
+        from datetime import datetime, timedelta
+        await db.add_to_queue(
+            channel_id="-100999888777",
+            scheduled_time=datetime.now() + timedelta(hours=2),
+            caption="Test Pending Post",
+            photo_ids=["test_p1"],
+            status="pending_local"
+        )
+        assert len(await db.get_channel_queue("-100999888777")) == 1
+
+        # Update channel: change title and toggle is_active to False -> should clear queue to 0
         update_res = await client.put(f"/api/channels/{ch_id}", json={"title": "Updated Channel", "is_active": False})
         assert update_res.status_code == 200
+        assert "отложка 0" in update_res.json()["message"]
+        # Queue must now be completely empty (0 posts)
+        assert len(await db.get_channel_queue("-100999888777")) == 0
 
-        # Verify updated
+        # Verify updated channel details
         get_res = await client.get(f"/api/channels/{ch_id}")
         assert get_res.status_code == 200
         assert get_res.json()["title"] == "Updated Channel"
         assert get_res.json()["is_active"] == 0
+        assert get_res.json()["current_buffer"] == 0
 
         # Toggle is_active back to True
         toggle_res = await client.put(f"/api/channels/{ch_id}", json={"is_active": True})
         assert toggle_res.status_code == 200
         get_toggle = await client.get(f"/api/channels/{ch_id}")
         assert get_toggle.json()["is_active"] == 1
+
+        # Test changing schedule interval triggers recreate_queue
+        with patch("webapp.api.routes.queue_manager.recreate_queue", AsyncMock(return_value=3)) as mock_recreate:
+            update_sched_res = await client.put(f"/api/channels/{ch_id}", json={"interval_minutes": 45})
+            assert update_sched_res.status_code == 200
+            assert mock_recreate.called
+
+        # Test changing publication parameters (e.g. photos_min, footer_text) triggers recreate_queue
+        with patch("webapp.api.routes.queue_manager.recreate_queue", AsyncMock(return_value=3)) as mock_recreate:
+            update_param_res = await client.put(f"/api/channels/{ch_id}", json={"photos_min": 3, "footer_text": "Новый футер"})
+            assert update_param_res.status_code == 200
+            assert "Очередь пересоздана" in update_param_res.json()["message"]
+            assert mock_recreate.called
+
+        # Test manual POST /channels/{id}/recreate endpoint
+        with patch("webapp.api.routes.queue_manager.recreate_queue", AsyncMock(return_value=3)) as mock_recreate:
+            recreate_res = await client.post(f"/api/channels/{ch_id}/recreate")
+            assert recreate_res.status_code == 200
+            assert "Очередь успешно пересоздана" in recreate_res.json()["message"]
+            assert mock_recreate.called
 
         # Test creating channel with empty title (should auto-fallback to channel_id when offline)
         auto_title_ch = {
