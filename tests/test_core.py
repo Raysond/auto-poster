@@ -268,3 +268,12 @@ async def test_post_builder_mock(tmp_path):
         assert 3 <= len(post["photo_files"]) <= 4
         assert "👉 <a href='https://t.me'>Ссылка</a>" in post["caption"]
         assert len(post["caption"]) <= MAX_CAPTION_LENGTH
+
+
+def test_telegram_proxy_session():
+    """Verify that AiohttpSession initializes cleanly with HTTP proxy URL."""
+    from aiogram.client.session.aiohttp import AiohttpSession
+    proxy_url = "http://127.0.0.1:2080"
+    session = AiohttpSession(proxy=proxy_url)
+    assert session is not None
+    assert session.proxy == proxy_url

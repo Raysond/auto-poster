@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     # Telegram Bot
     BOT_TOKEN: str = Field(default="", description="Telegram Bot API token from @BotFather")
     ADMIN_IDS: str = Field(default="", description="Comma-separated Telegram user IDs of admins")
+    TELEGRAM_PROXY_URL: Optional[str] = Field(
+        default=None,
+        description="HTTP or SOCKS5 proxy URL for Telegram Bot API (e.g. http://127.0.0.1:2080)"
+    )
 
     # Google Drive Service Account
     GOOGLE_SERVICE_ACCOUNT_FILE: str = Field(

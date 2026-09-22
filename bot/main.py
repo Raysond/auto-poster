@@ -9,6 +9,7 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from core.config import settings
 from core.database import db
@@ -92,8 +93,14 @@ async def main():
     dp.include_router(admin.router)
 
     if settings.BOT_TOKEN and not settings.BOT_TOKEN.startswith("123456789"):
+        session = None
+        if settings.TELEGRAM_PROXY_URL:
+            logger.info(f"Использование прокси для Telegram: {settings.TELEGRAM_PROXY_URL}")
+            session = AiohttpSession(proxy=settings.TELEGRAM_PROXY_URL)
+
         bot = Bot(
             token=settings.BOT_TOKEN,
+            session=session,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
         publisher.set_bot(bot)
