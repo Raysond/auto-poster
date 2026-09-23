@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response
 from pydantic import BaseModel
 from core.database import db
 from core.config import settings
+from core.utils import normalize_channel_id
 from services.google_drive import gdrive_service
 from services.post_builder import post_builder
 from services.publisher import publisher
@@ -63,7 +64,7 @@ class PostNowPayload(BaseModel):
 
 async def fetch_telegram_channel_title(channel_id: str) -> Optional[str]:
     """Fetch chat/channel title via Bot API."""
-    cleaned = str(channel_id).strip()
+    cleaned = normalize_channel_id(channel_id)
     target: str | int = int(cleaned) if cleaned.lstrip("-").isdigit() else cleaned
 
     # Try via aiogram bot instance
@@ -137,24 +138,27 @@ async def get_telegram_chat_title(
     admin: Dict[str, Any] = Depends(get_current_admin)
 ):
     """Fetch channel title from Telegram by channel ID or username."""
-    title = await fetch_telegram_channel_title(channel_id)
+    normalized_id = normalize_channel_id(channel_id)
+    title = await fetch_telegram_channel_title(normalized_id)
     if not title:
         raise HTTPException(
             status_code=404,
             detail="Не удалось получить название канала из Telegram. Убедитесь, что бот добавлен в канал."
         )
-    return {"channel_id": channel_id, "title": title}
+    return {"channel_id": normalized_id, "title": title}
 
 
 @router.post("/channels")
 async def create_channel(data: ChannelCreate, admin: Dict[str, Any] = Depends(get_current_admin)):
     """Add a new channel to auto-poster."""
     async with _channel_create_lock:
+        data.channel_id = normalize_channel_id(data.channel_id)
         existing = await db.get_channel_by_telegram_id(data.channel_id)
         if existing:
             raise HTTPException(status_code=400, detail="Канал с таким ID уже существует в базе.")
 
         payload = data.model_dump()
+        payload["channel_id"] = data.channel_id
         # Auto-fetch title from Telegram if empty
         if not payload.get("title") or not payload["title"].strip():
             fetched_title = await fetch_telegram_channel_title(data.channel_id)
@@ -189,6 +193,9 @@ async def update_channel(
         raise HTTPException(status_code=404, detail="Канал не найден.")
 
     update_dict = {k: v for k, v in data.model_dump().items() if v is not None}
+    if "channel_id" in update_dict and update_dict["channel_id"]:
+        update_dict["channel_id"] = normalize_channel_id(update_dict["channel_id"])
+
     # If title was explicitly provided as empty string, try auto-fetching
     if "title" in update_dict and (not update_dict["title"] or not update_dict["title"].strip()):
         target_ch_id = update_dict.get("channel_id") or ch["channel_id"]

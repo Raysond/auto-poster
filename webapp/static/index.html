@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Auto-Poster Admin</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/style.css?v=13">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -143,9 +143,9 @@
           </div>
 
           <div class="form-group">
-            <label>ID или @username канала:</label>
-            <input type="text" id="ch-channel-id" class="form-control" placeholder="-1001234567890 или @mychannel" required>
-            <small class="hint">Бот должен быть назначен администратором канала с правом публикации.</small>
+            <label>ID, @username или ссылка на канал:</label>
+            <input type="text" id="ch-channel-id" class="form-control" placeholder="https://t.me/svetasollars, @mychannel или -100..." required>
+            <small class="hint">Поддерживаются ссылки https://t.me/..., @username или числовой ID. Бот должен быть администратором канала.</small>
           </div>
 
           <div class="form-divider">Google Drive источники</div>
@@ -153,7 +153,7 @@
           <div class="form-group">
             <label>ID папки с фото (Google Drive):</label>
             <input type="text" id="ch-gdrive-folder" class="form-control" placeholder="1aBcDeFgHiJkLmNoP..." required>
-            <small class="hint">Папка, откуда бот берет случайные фото. Предоставьте доступ сервисному аккаунту!</small>
+            <small class="hint">Папка, откуда бот берет случайные фото.</small>
           </div>
 
           <div class="form-group">
@@ -208,13 +208,6 @@
             <small class="hint">Через запятую в формате ЧЧ:ММ.</small>
           </div>
 
-          <div class="form-group checkbox-group">
-            <label>
-              <input type="checkbox" id="ch-is-active" checked>
-              <span>Канал активен (автопостинг включен)</span>
-            </label>
-          </div>
-
           <div class="modal-footer">
             <button type="button" id="btn-delete-channel" class="btn-danger hidden">Удалить</button>
             <div class="flex-end">
@@ -242,6 +235,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>

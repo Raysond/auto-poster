@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto
 from core.database import db
+from core.utils import normalize_channel_id
 from services.post_builder import post_builder
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,8 @@ class Publisher:
                 media_group.append(InputMediaPhoto(media=file))
 
         try:
-            target = int(channel_id) if str(channel_id).lstrip("-").isdigit() else channel_id
+            clean_id = normalize_channel_id(str(channel_id))
+            target = int(clean_id) if clean_id.lstrip("-").isdigit() else clean_id
             if len(media_group) == 1:
                 # Single photo
                 try:

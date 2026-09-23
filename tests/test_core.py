@@ -337,3 +337,25 @@ async def test_post_builder_used_text_filtering(tmp_path):
         # Now build_post MUST pick "Text B" because "Text A" is in used_text_hashes
         post = await pb.build_post(channel)
         assert post["raw_text"] == "Text B"
+
+
+def test_normalize_channel_id():
+    from core.utils import normalize_channel_id
+
+    assert normalize_channel_id("https://t.me/svetasollars") == "@svetasollars"
+    assert normalize_channel_id("http://t.me/svetasollars") == "@svetasollars"
+    assert normalize_channel_id("https://t.me/svetasollars/") == "@svetasollars"
+    assert normalize_channel_id("https://t.me/svetasollars/1234") == "@svetasollars"
+    assert normalize_channel_id("https://t.me/svetasollars?boost=1") == "@svetasollars"
+    assert normalize_channel_id("t.me/svetasollars") == "@svetasollars"
+    assert normalize_channel_id("https://telegram.me/svetasollars") == "@svetasollars"
+    assert normalize_channel_id("telegram.me/svetasollars") == "@svetasollars"
+    assert normalize_channel_id("https://t.me/c/1234567890/10") == "-1001234567890"
+    assert normalize_channel_id("t.me/c/1234567890") == "-1001234567890"
+    assert normalize_channel_id("@svetasollars") == "@svetasollars"
+    assert normalize_channel_id("svetasollars") == "@svetasollars"
+    assert normalize_channel_id("-1001234567890") == "-1001234567890"
+    assert normalize_channel_id("1234567890") == "1234567890"
+    assert normalize_channel_id("") == ""
+    assert normalize_channel_id(None) == ""
+

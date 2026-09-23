@@ -682,9 +682,17 @@ select.form-control option {
   border-radius: 10px;
 }
 
+.status-item > div {
+  min-width: 0;
+  flex: 1;
+}
+
 .status-indicator {
   width: 10px;
   height: 10px;
+  min-width: 10px;
+  min-height: 10px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent-amber);
 }
@@ -693,7 +701,11 @@ select.form-control option {
 .status-indicator.err { background: var(--accent-red); }
 
 .status-label { font-size: 11px; color: var(--hint-color); }
-.status-val { font-size: 13px; font-weight: 500; }
+.status-val {
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
 
 /* Logs */
 .logs-list {

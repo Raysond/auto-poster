@@ -174,9 +174,6 @@ function renderChannels() {
 
   elChannelsList.innerHTML = channels.map(ch => {
     const isAct = !!ch.is_active;
-    const bufCount = isAct ? (ch.current_buffer || 0) : 0;
-    const bufBadgeClass = !isAct ? 'badge-buffer' : (bufCount >= 1 ? 'badge-active' : 'badge-buffer');
-    const bufStatusText = !isAct ? 'пауза' : (bufCount > 0 ? 'готова' : 'пуста');
 
     let scheduleText = '';
     if (ch.schedule_mode === 'exact_times') {
@@ -214,9 +211,6 @@ function renderChannels() {
           <div class="meta-pill">
             <span>🖼️</span> ${ch.photos_min}–${ch.photos_max} фото
           </div>
-          <div class="meta-pill ${bufBadgeClass} meta-pill-clickable" onclick="triggerRecreateQueue(${ch.id}, this)" title="Нажмите, чтобы пересоздать отложенный пост">
-            <span>📦</span> Отложка: <b>${bufStatusText}</b> <span class="pill-action-icon">🔄</span>
-          </div>
         </div>
 
         <div class="channel-card-actions">
@@ -230,6 +224,7 @@ function renderChannels() {
       </div>
     `;
   }).join('');
+
 }
 
 window.toggleChannelActive = async function(id, isActive, switchEl = null) {
@@ -335,9 +330,44 @@ if (elCopySourceSelect) {
     document.getElementById('ch-exact-times').value = donor.exact_times || '10:00,15:00,20:00';
     const chPostsPerDay = document.getElementById('ch-posts-per-day');
     if (chPostsPerDay) chPostsPerDay.value = donor.posts_per_day || 3;
-    document.getElementById('ch-is-active').checked = !!donor.is_active;
     toggleScheduleInputs();
   });
+}
+
+// Helper to normalize channel inputs like https://t.me/svetasollars -> @svetasollars
+function normalizeChannelId(val) {
+  if (!val) return '';
+  val = String(val).trim();
+
+  // Private link: t.me/c/1234567890/post_id -> -1001234567890
+  const cMatch = val.match(/(?:t\.me|telegram\.me)\/c\/(\d+)/i);
+  if (cMatch) {
+    return `-100${cMatch[1]}`;
+  }
+
+  // Public link: t.me/username or t.me/username/123
+  const uMatch = val.match(/(?:t\.me|telegram\.me)\/([a-zA-Z0-9_]+)/i);
+  if (uMatch) {
+    const user = uMatch[1];
+    if (!['joinchat', 'c', 'addstickers', 'addtheme'].includes(user.toLowerCase())) {
+      return `@${user}`;
+    }
+  }
+
+  if ((val.startsWith('-') && /^\d+$/.test(val.slice(1))) || /^\d+$/.test(val)) {
+    return val;
+  }
+
+  if (val.startsWith('@')) {
+    const clean = val.replace(/^@+/, '').split('/')[0].split('?')[0].trim();
+    return clean ? `@${clean}` : val;
+  }
+
+  if (/^[a-zA-Z][a-zA-Z0-9_]{3,}$/.test(val)) {
+    return `@${val}`;
+  }
+
+  return val;
 }
 
 // Auto-fetch channel title from Telegram
@@ -347,8 +377,13 @@ async function checkAndAutoFetchTitle() {
   const channelIdInput = document.getElementById('ch-channel-id');
   if (!titleInput || !channelIdInput) return;
 
+  const rawChannelId = channelIdInput.value.trim();
+  const channelId = normalizeChannelId(rawChannelId);
+  if (channelId && channelId !== rawChannelId) {
+    channelIdInput.value = channelId;
+  }
+
   const currentTitle = titleInput.value.trim();
-  const channelId = channelIdInput.value.trim();
 
   if (currentTitle === '' && channelId.length >= 3 && !isFetchingTitle) {
     isFetchingTitle = true;
@@ -372,6 +407,15 @@ async function checkAndAutoFetchTitle() {
 
 const elChChannelId = document.getElementById('ch-channel-id');
 if (elChChannelId) {
+  elChChannelId.addEventListener('input', () => {
+    const val = elChChannelId.value.trim();
+    if (val.includes('t.me/') || val.includes('telegram.me/')) {
+      const normalized = normalizeChannelId(val);
+      if (normalized !== val) {
+        elChChannelId.value = normalized;
+      }
+    }
+  });
   elChChannelId.addEventListener('blur', checkAndAutoFetchTitle);
   elChChannelId.addEventListener('change', checkAndAutoFetchTitle);
 }
@@ -399,7 +443,6 @@ window.openChannelModal = function(id = null) {
       document.getElementById('ch-exact-times').value = ch.exact_times || '10:00,15:00,20:00';
       const chPostsPerDay = document.getElementById('ch-posts-per-day');
       if (chPostsPerDay) chPostsPerDay.value = ch.posts_per_day || 3;
-      document.getElementById('ch-is-active').checked = !!ch.is_active;
     }
   } else {
     elModalTitle.textContent = 'Добавить новый канал';
@@ -472,7 +515,8 @@ elChannelForm.addEventListener('submit', async (e) => {
     const id = document.getElementById('channel-db-id').value;
 
     let titleVal = document.getElementById('ch-title').value.trim();
-    const channelIdVal = document.getElementById('ch-channel-id').value.trim();
+    const rawChannelId = document.getElementById('ch-channel-id').value.trim();
+    const channelIdVal = normalizeChannelId(rawChannelId);
     if (!titleVal && channelIdVal) {
       await checkAndAutoFetchTitle();
       titleVal = document.getElementById('ch-title').value.trim();
@@ -491,9 +535,13 @@ elChannelForm.addEventListener('submit', async (e) => {
       schedule_mode: document.getElementById('ch-schedule-mode').value,
       interval_minutes: parseInt(document.getElementById('ch-interval').value, 10),
       exact_times: document.getElementById('ch-exact-times').value.trim(),
-      posts_per_day: postsPerDayVal,
-      is_active: document.getElementById('ch-is-active').checked
+      posts_per_day: postsPerDayVal
     };
+
+    if (!id) {
+      payload.is_active = true;
+    }
+
 
     try {
       if (id) {

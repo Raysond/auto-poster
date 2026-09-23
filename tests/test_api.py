@@ -192,3 +192,35 @@ async def test_api_concurrent_double_trigger_protection(tmp_path):
             res_rec1 = await task_rec1
             assert res_rec1.status_code == 200
 
+
+@pytest.mark.asyncio
+async def test_api_channel_id_link_normalization(tmp_path):
+    db.db_path = str(tmp_path / "test_api_norm.db")
+    await db.init_db()
+
+    app = create_fastapi_app()
+    app.dependency_overrides[get_current_admin] = lambda: {"id": 1, "first_name": "Test Admin"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Create channel using full t.me link
+        new_channel = {
+            "channel_id": "https://t.me/svetasollars",
+            "title": "Sveta Channel",
+            "gdrive_folder_id": "folder_norm"
+        }
+        res = await client.post("/api/channels", json=new_channel)
+        assert res.status_code == 200
+        ch_id = res.json()["id"]
+
+        # Fetch channel and verify channel_id was normalized to @svetasollars
+        get_res = await client.get(f"/api/channels/{ch_id}")
+        assert get_res.status_code == 200
+        assert get_res.json()["channel_id"] == "@svetasollars"
+
+        # Update channel using another link
+        put_res = await client.put(f"/api/channels/{ch_id}", json={"channel_id": "http://t.me/svetasollars_new/"})
+        assert put_res.status_code == 200
+        get_res2 = await client.get(f"/api/channels/{ch_id}")
+        assert get_res2.json()["channel_id"] == "@svetasollars_new"
+
+
