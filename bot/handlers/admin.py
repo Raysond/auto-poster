@@ -60,7 +60,8 @@ async def cmd_status(message: types.Message):
         for ch in channels:
             buffer_count = await queue_manager.get_current_buffer_count(ch)
             status_icon = "🟢" if ch["is_active"] else "⏸️"
-            text += f"{status_icon} <b>{ch['title']}</b> ({ch['channel_id']}): {buffer_count}/{ch['buffer_target']} в отложке\n"
+            buf_str = "готова" if buffer_count > 0 else "пуста"
+            text += f"{status_icon} <b>{ch['title']}</b> ({ch['channel_id']}): отложка {buf_str}\n"
     else:
         text += "<i>Каналы еще не добавлены. Используйте /admin для добавления.</i>"
 

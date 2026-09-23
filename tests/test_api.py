@@ -41,7 +41,6 @@ async def test_api_status_and_channels(tmp_path):
             "interval_minutes": 180,
             "schedule_mode": "interval",
             "exact_times": "10:00,15:00",
-            "buffer_target": 3,
             "is_active": True
         }
         create_res = await client.post("/api/channels", json=new_channel)
@@ -130,3 +129,66 @@ async def test_api_status_and_channels(tmp_path):
         # List channels after delete
         list_after = await client.get("/api/channels")
         assert len(list_after.json()) == 0
+
+
+@pytest.mark.asyncio
+async def test_api_concurrent_double_trigger_protection(tmp_path):
+    import asyncio
+    db.db_path = str(tmp_path / "test_api_lock.db")
+    await db.init_db()
+
+    app = create_fastapi_app()
+    app.dependency_overrides[get_current_admin] = lambda: {"id": 1, "first_name": "Test Admin"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Create test channel
+        new_channel = {
+            "channel_id": "-100111222333",
+            "title": "Lock Test Channel",
+            "gdrive_folder_id": "folder_lock",
+            "is_active": True
+        }
+        create_res = await client.post("/api/channels", json=new_channel)
+        assert create_res.status_code == 200
+        ch_id = create_res.json()["id"]
+
+        # Simulate slow publish_post_now to test concurrent post_now calls
+        slow_event = asyncio.Event()
+
+        async def fake_publish_slow(ch):
+            await slow_event.wait()
+
+        with patch("webapp.api.routes.publisher.publish_post_now", side_effect=fake_publish_slow):
+            task1 = asyncio.create_task(client.post(f"/api/channels/{ch_id}/post_now"))
+            # Give task1 a moment to acquire the lock and start waiting
+            await asyncio.sleep(0.02)
+
+            # Second call while task1 is running should be rejected with 409 Conflict
+            res2 = await client.post(f"/api/channels/{ch_id}/post_now")
+            assert res2.status_code == 409
+            assert "уже выполняется" in res2.json()["detail"]
+
+            # Release task1
+            slow_event.set()
+            res1 = await task1
+            assert res1.status_code == 200
+
+        # Simulate slow recreate_queue to test concurrent recreate calls
+        recreate_event = asyncio.Event()
+
+        async def fake_recreate_slow(ch):
+            await recreate_event.wait()
+            return 3
+
+        with patch("webapp.api.routes.queue_manager.recreate_queue", side_effect=fake_recreate_slow):
+            task_rec1 = asyncio.create_task(client.post(f"/api/channels/{ch_id}/recreate"))
+            await asyncio.sleep(0.02)
+
+            res_rec2 = await client.post(f"/api/channels/{ch_id}/recreate")
+            assert res_rec2.status_code == 409
+            assert "уже выполняется" in res_rec2.json()["detail"]
+
+            recreate_event.set()
+            res_rec1 = await task_rec1
+            assert res_rec1.status_code == 200
+

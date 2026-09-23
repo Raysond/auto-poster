@@ -37,21 +37,28 @@ class PostBuilder:
             await db.reset_used_photos(channel_id)
             available_images = all_images
 
-        # Pick random count between min and max
-        count = random.randint(photos_min, min(photos_max, len(available_images)))
+        # Pick random count between min and max (gracefully handling small folders)
+        min_count = min(photos_min, len(available_images))
+        max_count = min(photos_max, len(available_images))
+        count = random.randint(min_count, max_count)
         selected_images = random.sample(available_images, count)
 
         # 2. Fetch and pick random text
         selected_text = ""
         if texts_file_id:
-            all_texts = await gdrive_service.get_texts_list(texts_file_id)
+            try:
+                all_texts = await gdrive_service.get_texts_list(texts_file_id)
+            except Exception as e:
+                logger.error(f"Не удалось загрузить texts.txt ({texts_file_id}): {e}")
+                all_texts = []
+
             if all_texts:
                 used_text_hashes = await db.get_used_text_hashes(channel_id)
-                # Map texts to their hashes
+                # Map texts to their hashes and filter out already used
                 available_texts = [
                     t for t in all_texts 
                     if db.get_text_hash(t) not in used_text_hashes
-                ] if hasattr(db, "get_text_hash") else all_texts
+                ]
 
                 if not available_texts:
                     logger.info(f"Все тексты для канала {channel_id} использованы. Сбрасываем историю.")

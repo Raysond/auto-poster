@@ -15,6 +15,11 @@ def get_text_hash(text: str) -> str:
 
 
 class Database:
+    @staticmethod
+    def get_text_hash(text: str) -> str:
+        """Generate SHA256 short hash of a text string."""
+        return get_text_hash(text)
+
     def __init__(self, db_path: str = None):
         self.db_path = db_path or settings.DATABASE_PATH
         # Ensure directory exists
@@ -48,7 +53,7 @@ class Database:
                     schedule_mode TEXT DEFAULT 'interval',
                     exact_times TEXT DEFAULT '10:00,15:00,20:00',
                     posts_per_day INTEGER DEFAULT 3,
-                    buffer_target INTEGER DEFAULT 3,
+                    buffer_target INTEGER DEFAULT 1,
                     is_active INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -59,6 +64,14 @@ class Database:
             """)
             try:
                 await conn.execute("ALTER TABLE channels ADD COLUMN posts_per_day INTEGER DEFAULT 3")
+            except Exception:
+                pass
+            try:
+                await conn.execute("UPDATE channels SET buffer_target = 1 WHERE buffer_target != 1")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE scheduled_queue ADD COLUMN raw_text TEXT DEFAULT ''")
             except Exception:
                 pass
             await conn.executescript("""
@@ -85,6 +98,7 @@ class Database:
                     scheduled_time TIMESTAMP NOT NULL,
                     caption TEXT NOT NULL,
                     photo_ids TEXT NOT NULL, -- JSON list of Google Drive file IDs
+                    raw_text TEXT DEFAULT '',
                     telegram_message_id TEXT,
                     status TEXT DEFAULT 'pending_local', -- 'pending_native', 'pending_local', 'published', 'failed'
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -147,7 +161,7 @@ class Database:
                 data.get("schedule_mode", "interval"),
                 data.get("exact_times", "10:00,15:00,20:00"),
                 data.get("posts_per_day", 3),
-                data.get("buffer_target", 3),
+                1,
                 1 if data.get("is_active", True) else 0
             ))
             await conn.commit()
@@ -159,7 +173,7 @@ class Database:
         for key in [
             "channel_id", "title", "gdrive_folder_id", "gdrive_texts_file_id",
             "gdrive_footer_file_id", "footer_text", "photos_min", "photos_max",
-            "interval_minutes", "schedule_mode", "exact_times", "posts_per_day", "buffer_target", "is_active"
+            "interval_minutes", "schedule_mode", "exact_times", "posts_per_day", "is_active"
         ]:
             if key in data:
                 fields.append(f"{key} = ?")
@@ -268,6 +282,7 @@ class Database:
             for row in rows:
                 item = dict(row)
                 item["photo_ids"] = json.loads(item["photo_ids"]) if item["photo_ids"] else []
+                item["raw_text"] = item.get("raw_text") or ""
                 result.append(item)
             return result
 
@@ -277,6 +292,7 @@ class Database:
         scheduled_time: datetime,
         caption: str,
         photo_ids: List[str],
+        raw_text: str = "",
         telegram_message_id: Optional[str] = None,
         status: str = "pending_local"
     ) -> int:
@@ -284,14 +300,15 @@ class Database:
             cursor = await conn.execute(
                 """
                 INSERT INTO scheduled_queue (
-                    channel_id, scheduled_time, caption, photo_ids, telegram_message_id, status
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    channel_id, scheduled_time, caption, photo_ids, raw_text, telegram_message_id, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(channel_id),
                     scheduled_time.isoformat(),
                     caption,
                     json.dumps(photo_ids),
+                    raw_text,
                     str(telegram_message_id) if telegram_message_id else None,
                     status
                 )

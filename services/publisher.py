@@ -35,7 +35,8 @@ class Publisher:
         if not post_data:
             post_data = await post_builder.build_post(channel)
 
-        photos_data = await post_builder.download_post_images(post_data["photo_files"])
+        photo_files = post_data.get("photo_files") or [{"id": pid} for pid in post_data.get("photo_ids", [])]
+        photos_data = await post_builder.download_post_images(photo_files)
         caption = post_data["caption"]
 
         if not photos_data:
@@ -55,15 +56,35 @@ class Publisher:
             target = int(channel_id) if str(channel_id).lstrip("-").isdigit() else channel_id
             if len(media_group) == 1:
                 # Single photo
-                await self.bot.send_photo(
-                    chat_id=target,
-                    photo=media_group[0].media,
-                    caption=caption,
-                    parse_mode="HTML"
-                )
+                try:
+                    await self.bot.send_photo(
+                        chat_id=target,
+                        photo=media_group[0].media,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                except Exception as send_err:
+                    if "can't parse entities" in str(send_err).lower():
+                        logger.warning(f"Ошибка HTML-разметки при отправке фото в {channel_id}, пробуем без parse_mode: {send_err}")
+                        await self.bot.send_photo(
+                            chat_id=target,
+                            photo=media_group[0].media,
+                            caption=caption,
+                            parse_mode=None
+                        )
+                    else:
+                        raise
             else:
                 # Album of 2-10 photos
-                await self.bot.send_media_group(chat_id=target, media=media_group)
+                try:
+                    await self.bot.send_media_group(chat_id=target, media=media_group)
+                except Exception as send_err:
+                    if "can't parse entities" in str(send_err).lower():
+                        logger.warning(f"Ошибка HTML-разметки при отправке альбома в {channel_id}, пробуем без parse_mode: {send_err}")
+                        media_group[0].parse_mode = None
+                        await self.bot.send_media_group(chat_id=target, media=media_group)
+                    else:
+                        raise
 
             # Record in database
             await db.mark_photos_as_used(channel_id, post_data["photo_ids"])

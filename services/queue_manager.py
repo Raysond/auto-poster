@@ -89,6 +89,11 @@ class QueueManager:
 
             if existing_times:
                 anchor = max(existing_times)
+                if anchor < now:
+                    candidate = anchor
+                    while candidate + timedelta(minutes=interval) <= now:
+                        candidate += timedelta(minutes=interval)
+                    anchor = candidate
             else:
                 if last_pub is None and channel_id:
                     last_pub = await db.get_last_published_time(channel_id)
@@ -112,8 +117,12 @@ class QueueManager:
 
             # Determine anchor point:
             if existing_times:
-                # Start after the latest post in the queue
                 anchor = max(existing_times)
+                if anchor < now:
+                    candidate = anchor
+                    while candidate + timedelta(minutes=interval) <= now:
+                        candidate += timedelta(minutes=interval)
+                    anchor = candidate
             else:
                 if last_pub is None and channel_id:
                     last_pub = await db.get_last_published_time(channel_id)
@@ -135,18 +144,18 @@ class QueueManager:
 
     async def refill_buffer(self, channel: Dict[str, Any]) -> int:
         """
-        Ensures the channel has target buffer posts (default 3) in schedule.
+        Ensures the channel has 1 scheduled post in buffer.
         Returns number of newly scheduled posts.
         """
         channel_id = str(channel["channel_id"])
-        target = channel.get("buffer_target", 3)
+        target = 1
         current_count = await self.get_current_buffer_count(channel)
 
         needed = max(0, target - current_count)
         if needed == 0:
             return 0
 
-        logger.info(f"Канал {channel.get('title', channel_id)}: в очереди {current_count}/{target}, пополняем на {needed} постов.")
+        logger.info(f"Канал {channel.get('title', channel_id)}: в очереди {current_count}/{target}, пополняем на {needed} пост.")
         slots = await self.calculate_next_time_slots(channel, needed)
         scheduled_count = 0
 
@@ -160,6 +169,7 @@ class QueueManager:
                     scheduled_time=slot,
                     caption=post_data["caption"],
                     photo_ids=post_data["photo_ids"],
+                    raw_text=post_data.get("raw_text", ""),
                     status="pending_local"
                 )
                 scheduled_count += 1
@@ -184,6 +194,8 @@ class QueueManager:
         for item in existing_queue:
             if item.get("photo_ids"):
                 await db.unmark_photos(channel_id, item["photo_ids"])
+            if item.get("raw_text"):
+                await db.unmark_text(channel_id, item["raw_text"])
 
         # 2. Clear database queue records
         await db.clear_channel_queue(channel_id)

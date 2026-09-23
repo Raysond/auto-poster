@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from collections import defaultdict
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response
 from pydantic import BaseModel
@@ -14,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+# In-memory locks to prevent double-execution / race conditions per channel
+_channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+_channel_create_lock = asyncio.Lock()
+
 
 class ChannelCreate(BaseModel):
     channel_id: str
@@ -28,7 +34,7 @@ class ChannelCreate(BaseModel):
     schedule_mode: str = "interval"
     exact_times: str = "10:00,15:00,20:00"
     posts_per_day: Optional[int] = 3
-    buffer_target: int = 3
+    buffer_target: int = 1
     is_active: bool = True
 
 
@@ -47,6 +53,12 @@ class ChannelUpdate(BaseModel):
     posts_per_day: Optional[int] = None
     buffer_target: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+class PostNowPayload(BaseModel):
+    caption: Optional[str] = None
+    photo_ids: Optional[List[str]] = None
+    raw_text: Optional[str] = ""
 
 
 async def fetch_telegram_channel_title(channel_id: str) -> Optional[str]:
@@ -137,19 +149,21 @@ async def get_telegram_chat_title(
 @router.post("/channels")
 async def create_channel(data: ChannelCreate, admin: Dict[str, Any] = Depends(get_current_admin)):
     """Add a new channel to auto-poster."""
-    existing = await db.get_channel_by_telegram_id(data.channel_id)
-    if existing:
-        raise HTTPException(status_code=400, detail="Канал с таким ID уже существует в базе.")
+    async with _channel_create_lock:
+        existing = await db.get_channel_by_telegram_id(data.channel_id)
+        if existing:
+            raise HTTPException(status_code=400, detail="Канал с таким ID уже существует в базе.")
 
-    payload = data.model_dump()
-    # Auto-fetch title from Telegram if empty
-    if not payload.get("title") or not payload["title"].strip():
-        fetched_title = await fetch_telegram_channel_title(data.channel_id)
-        payload["title"] = fetched_title or data.channel_id
+        payload = data.model_dump()
+        # Auto-fetch title from Telegram if empty
+        if not payload.get("title") or not payload["title"].strip():
+            fetched_title = await fetch_telegram_channel_title(data.channel_id)
+            payload["title"] = fetched_title or data.channel_id
 
-    channel_id = await db.create_channel(payload)
-    await db.add_log(f"Добавлен новый канал: {payload['title']} ({data.channel_id})", level="INFO")
-    return {"id": channel_id, "title": payload["title"], "message": "Канал успешно добавлен."}
+        channel_id = await db.create_channel(payload)
+        await db.add_log(f"Добавлен новый канал: {payload['title']} ({data.channel_id})", level="INFO")
+        return {"id": channel_id, "title": payload["title"], "message": "Канал успешно добавлен."}
+
 
 
 @router.get("/channels/{channel_db_id}")
@@ -195,7 +209,6 @@ async def update_channel(
         "interval_minutes",
         "exact_times",
         "posts_per_day",
-        "buffer_target",
     ]
 
     def is_field_changed(field: str) -> bool:
@@ -284,31 +297,85 @@ async def preview_post(channel_db_id: int, admin: Dict[str, Any] = Depends(get_c
 
 
 @router.post("/channels/{channel_db_id}/post_now")
-async def post_now(channel_db_id: int, admin: Dict[str, Any] = Depends(get_current_admin)):
+async def post_now(
+    channel_db_id: int,
+    payload: Optional[PostNowPayload] = None,
+    admin: Dict[str, Any] = Depends(get_current_admin)
+):
     """Publish a post immediately to the channel."""
-    ch = await db.get_channel_by_id(channel_db_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="Канал не найден.")
+    lock = _channel_locks[channel_db_id]
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Для данного канала уже выполняется операция публикации. Пожалуйста, подождите."
+        )
 
-    try:
-        await publisher.publish_post_now(ch)
-        return {"message": f"Пост успешно опубликован в канал {ch['title']}!"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Не удалось опубликовать пост: {str(e)}")
+    async with lock:
+        ch = await db.get_channel_by_id(channel_db_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не найден.")
+
+        try:
+            channel_id = str(ch["channel_id"])
+            if payload and payload.photo_ids:
+                # Custom post (e.g. from Preview tab)
+                post_data = {
+                    "channel_id": channel_id,
+                    "caption": payload.caption or "",
+                    "photo_files": [{"id": pid} for pid in payload.photo_ids],
+                    "photo_ids": payload.photo_ids,
+                    "raw_text": payload.raw_text or ""
+                }
+                await publisher.publish_post_now(ch, post_data)
+            else:
+                # Check if there is an existing pending post in the queue
+                pending_queue = await db.get_channel_queue(channel_id)
+                if pending_queue:
+                    item = pending_queue[0]
+                    post_data = {
+                        "channel_id": channel_id,
+                        "caption": item["caption"],
+                        "photo_files": [{"id": pid} for pid in item["photo_ids"]],
+                        "photo_ids": item["photo_ids"],
+                        "raw_text": item.get("raw_text", "")
+                    }
+                    await publisher.publish_post_now(ch, post_data)
+                    await db.mark_queue_published(item["id"])
+                else:
+                    await publisher.publish_post_now(ch)
+
+            # Refill 1-post buffer if channel is active
+            if ch.get("is_active"):
+                try:
+                    await queue_manager.refill_buffer(ch)
+                except Exception as ref_err:
+                    logger.warning(f"Ошибка пополнения буфера канала {channel_id} после post_now: {ref_err}")
+
+            return {"message": f"Пост успешно опубликован в канал {ch['title']}!"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Не удалось опубликовать пост: {str(e)}")
 
 
 @router.post("/channels/{channel_db_id}/refill")
 async def refill_channel_buffer(channel_db_id: int, admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Force refill of the channel's 3-post buffer."""
-    ch = await db.get_channel_by_id(channel_db_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="Канал не найден.")
+    """Force refill of the channel's 1-post buffer."""
+    lock = _channel_locks[channel_db_id]
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Операция пополнения отложки уже выполняется. Пожалуйста, подождите."
+        )
 
-    try:
-        added = await queue_manager.refill_buffer(ch)
-        return {"message": f"Отложка пополнена. Добавлено новых постов: {added}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка пополнения отложки: {str(e)}")
+    async with lock:
+        ch = await db.get_channel_by_id(channel_db_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не найден.")
+
+        try:
+            added = await queue_manager.refill_buffer(ch)
+            return {"message": f"Отложка пополнена. Добавлено новых постов: {added}"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Ошибка пополнения отложки: {str(e)}")
 
 
 @router.post("/channels/{channel_db_id}/recreate")
@@ -317,24 +384,34 @@ async def recreate_channel_queue_endpoint(
     admin: Dict[str, Any] = Depends(get_current_admin)
 ):
     """Clear and recreate all pending scheduled posts for the channel."""
-    ch = await db.get_channel_by_id(channel_db_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="Канал не найден.")
-
-    if not ch.get("is_active"):
-        return {"message": "Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенные посты."}
-
-    try:
-        count = await queue_manager.recreate_queue(ch)
-        await db.add_log(
-            f"Очередь постов канала {ch['title']} пересоздана вручную ({count} постов).",
-            level="INFO",
-            channel_id=str(ch["channel_id"])
+    lock = _channel_locks[channel_db_id]
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Для данного канала уже выполняется пересоздание очереди. Пожалуйста, подождите."
         )
-        return {"message": f"Очередь успешно пересоздана! Сформировано новых постов: {count}"}
-    except Exception as e:
-        logger.error(f"Ошибка ручного пересоздания очереди для {ch['title']}: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка пересоздания очереди: {str(e)}")
+
+    async with lock:
+        ch = await db.get_channel_by_id(channel_db_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не найден.")
+
+        if not ch.get("is_active"):
+            return {"message": "Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенный пост."}
+
+        try:
+            count = await queue_manager.recreate_queue(ch)
+            await db.add_log(
+                f"Очередь постов канала {ch['title']} пересоздана вручную ({count} постов).",
+                level="INFO",
+                channel_id=str(ch["channel_id"])
+            )
+            msg = "Очередь успешно пересоздана! Сформирован отложенный пост." if count == 1 else f"Очередь успешно пересоздана! Сформировано новых постов: {count}"
+            return {"message": msg}
+        except Exception as e:
+            logger.error(f"Ошибка ручного пересоздания очереди для {ch['title']}: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка пересоздания очереди: {str(e)}")
+
 
 
 @router.get("/logs")

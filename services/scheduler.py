@@ -42,7 +42,7 @@ class BotScheduler:
             logger.info("Фоновый планировщик задач остановлен.")
 
     async def job_check_queues(self):
-        """Periodically ensures every channel has 3 posts in queue."""
+        """Periodically ensures every channel has 1 post in queue."""
         logger.debug("Запуск плановой проверки буферов отложки...")
         try:
             await queue_manager.check_and_refill_all_active_channels()
@@ -53,7 +53,7 @@ class BotScheduler:
         """
         Publishes posts from the local SQLite queue whose scheduled_time has arrived.
         """
-        now_iso = datetime.now().isoformat()
+        now = datetime.now()
         channels = await db.get_active_channels()
 
         for ch in channels:
@@ -61,7 +61,12 @@ class BotScheduler:
             queue = await db.get_channel_queue(channel_id)
             for item in queue:
                 # Check if item is ready to publish
-                if item["scheduled_time"] <= now_iso and item["status"] == "pending_local":
+                try:
+                    sched_dt = datetime.fromisoformat(item["scheduled_time"])
+                except Exception:
+                    sched_dt = None
+
+                if sched_dt and sched_dt <= now and item["status"] == "pending_local":
                     try:
                         logger.info(f"Наступило время публикации для канала {channel_id}: {item['id']}")
                         # Convert item back to post_data format
@@ -70,7 +75,7 @@ class BotScheduler:
                             "caption": item["caption"],
                             "photo_files": [{"id": pid} for pid in item["photo_ids"]],
                             "photo_ids": item["photo_ids"],
-                            "raw_text": ""
+                            "raw_text": item.get("raw_text", "")
                         }
                         await publisher.publish_post_now(ch, post_data)
                         await db.mark_queue_published(item["id"])

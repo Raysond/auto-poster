@@ -40,6 +40,75 @@ function notify(msg, type = 'info') {
   alert(msg);
 }
 
+// --- Anti-Double-Click and Debounce Protection ---
+const activeActionLocks = new Set();
+let lastGlobalClickTime = 0;
+let lastGlobalClickedTarget = null;
+
+// Global rapid double-click guard in capture phase (suppresses clicks < 400ms on interactive elements)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('button, .btn-primary, .btn-primary-sm, .btn-success, .btn-danger, .btn-ghost, .btn-ghost-sm, .btn-icon, .meta-pill-clickable');
+  if (!btn) return;
+
+  const now = Date.now();
+  if (btn === lastGlobalClickedTarget && (now - lastGlobalClickTime < 400)) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    console.warn('[Anti-Double-Click] Rapid double click suppressed.');
+    return;
+  }
+  lastGlobalClickTime = now;
+  lastGlobalClickedTarget = btn;
+}, true);
+
+/**
+ * Execute an async function with lock to prevent concurrent executions.
+ * Disables the button/element, applies visual feedback and enforces minimum cooldown.
+ */
+async function withActionLock(key, element, asyncFn, options = {}) {
+  if (activeActionLocks.has(key)) {
+    console.warn(`[Anti-Double-Click] Action "${key}" is already running.`);
+    return;
+  }
+
+  activeActionLocks.add(key);
+
+  const cooldownMs = options.cooldownMs ?? 500;
+  const loadingText = options.loadingText;
+  let originalHtml = null;
+  let originalDisabled = false;
+
+  if (element) {
+    element.classList.add('is-busy');
+    if (element.tagName === 'BUTTON' || element.tagName === 'INPUT') {
+      originalDisabled = element.disabled;
+      element.disabled = true;
+    }
+    if (loadingText) {
+      originalHtml = element.innerHTML;
+      element.innerHTML = loadingText;
+    }
+  }
+
+  try {
+    return await asyncFn();
+  } finally {
+    setTimeout(() => {
+      activeActionLocks.delete(key);
+      if (element) {
+        element.classList.remove('is-busy');
+        if (element.tagName === 'BUTTON' || element.tagName === 'INPUT') {
+          element.disabled = originalDisabled;
+        }
+        if (loadingText && originalHtml !== null) {
+          element.innerHTML = originalHtml;
+        }
+      }
+    }, cooldownMs);
+  }
+}
+
+
 // --- DOM Elements ---
 const elTabs = document.querySelectorAll('.nav-tab');
 const elTabContents = document.querySelectorAll('.tab-content');
@@ -106,8 +175,8 @@ function renderChannels() {
   elChannelsList.innerHTML = channels.map(ch => {
     const isAct = !!ch.is_active;
     const bufCount = isAct ? (ch.current_buffer || 0) : 0;
-    const bufTarget = ch.buffer_target || 3;
-    const bufBadgeClass = !isAct ? 'badge-buffer' : (bufCount >= bufTarget ? 'badge-active' : 'badge-buffer');
+    const bufBadgeClass = !isAct ? 'badge-buffer' : (bufCount >= 1 ? 'badge-active' : 'badge-buffer');
+    const bufStatusText = !isAct ? 'пауза' : (bufCount > 0 ? 'готова' : 'пуста');
 
     let scheduleText = '';
     if (ch.schedule_mode === 'exact_times') {
@@ -132,7 +201,7 @@ function renderChannels() {
               ${isAct ? 'Активен' : 'Пауза'}
             </span>
             <label class="switch" title="${isAct ? 'Приостановить канал' : 'Активировать канал'}">
-              <input type="checkbox" id="switch-${ch.id}" ${isAct ? 'checked' : ''} onchange="toggleChannelActive(${ch.id}, this.checked)">
+              <input type="checkbox" id="switch-${ch.id}" ${isAct ? 'checked' : ''} onchange="toggleChannelActive(${ch.id}, this.checked, this)">
               <span class="slider"></span>
             </label>
           </div>
@@ -145,13 +214,13 @@ function renderChannels() {
           <div class="meta-pill">
             <span>🖼️</span> ${ch.photos_min}–${ch.photos_max} фото
           </div>
-          <div class="meta-pill ${bufBadgeClass} meta-pill-clickable" onclick="triggerRecreateQueue(${ch.id})" title="Нажмите, чтобы пересоздать посты в отложке">
-            <span>📦</span> Отложка: <b>${bufCount} / ${bufTarget}</b> <span class="pill-action-icon">🔄</span>
+          <div class="meta-pill ${bufBadgeClass} meta-pill-clickable" onclick="triggerRecreateQueue(${ch.id}, this)" title="Нажмите, чтобы пересоздать отложенный пост">
+            <span>📦</span> Отложка: <b>${bufStatusText}</b> <span class="pill-action-icon">🔄</span>
           </div>
         </div>
 
         <div class="channel-card-actions">
-          <button class="btn-card-action btn-primary-sm" onclick="triggerPostNow(${ch.id})">
+          <button class="btn-card-action btn-primary-sm" onclick="triggerPostNow(${ch.id}, this)">
             🚀 Опубликовать сейчас
           </button>
           <button class="btn-card-action btn-ghost" onclick="openChannelModal(${ch.id})">
@@ -163,29 +232,31 @@ function renderChannels() {
   }).join('');
 }
 
-window.toggleChannelActive = async function(id, isActive) {
-  const label = document.getElementById(`status-label-${id}`);
-  if (label) {
-    label.textContent = isActive ? 'Активен' : 'Пауза';
-    label.className = `channel-toggle-label ${isActive ? 'active' : 'paused'}`;
-  }
-  try {
-    const res = await api(`/api/channels/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ is_active: isActive })
-    });
-    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
-    await loadChannels();
-    notify(res.message);
-  } catch (err) {
+window.toggleChannelActive = async function(id, isActive, switchEl = null) {
+  await withActionLock(`toggle_channel_${id}`, switchEl, async () => {
+    const label = document.getElementById(`status-label-${id}`);
     if (label) {
-      label.textContent = !isActive ? 'Активен' : 'Пауза';
-      label.className = `channel-toggle-label ${!isActive ? 'active' : 'paused'}`;
+      label.textContent = isActive ? 'Активен' : 'Пауза';
+      label.className = `channel-toggle-label ${isActive ? 'active' : 'paused'}`;
     }
-    const sw = document.getElementById(`switch-${id}`);
-    if (sw) sw.checked = !isActive;
-    notify('Не удалось обновить статус: ' + err.message, 'error');
-  }
+    try {
+      const res = await api(`/api/channels/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_active: isActive })
+      });
+      if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+      await loadChannels();
+      notify(res.message);
+    } catch (err) {
+      if (label) {
+        label.textContent = !isActive ? 'Активен' : 'Пауза';
+        label.className = `channel-toggle-label ${!isActive ? 'active' : 'paused'}`;
+      }
+      const sw = document.getElementById(`switch-${id}`);
+      if (sw) sw.checked = !isActive;
+      notify('Не удалось обновить статус: ' + err.message, 'error');
+    }
+  }, { cooldownMs: 600 });
 };
 
 function populatePreviewSelect() {
@@ -194,44 +265,57 @@ function populatePreviewSelect() {
 }
 
 // --- Trigger Actions ---
-window.triggerRecreateQueue = async function(id) {
+window.triggerRecreateQueue = async function(id, pillEl = null) {
   const ch = channels.find(c => c.id === id);
   const title = ch ? ch.title : 'канала';
   if (ch && !ch.is_active) {
-    notify('Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенные посты.', 'warning');
+    notify('Канал отключен (отложка 0). Включите канал, чтобы сформировать отложенный пост.', 'warning');
     return;
   }
-  if (!confirm(`Пересоздать все посты в отложке для «${title}»?`)) return;
-  try {
-    const res = await api(`/api/channels/${id}/recreate`, { method: 'POST' });
-    notify(res.message);
-    if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-    await loadChannels();
-  } catch (err) {
-    notify('Ошибка: ' + err.message, 'error');
-  }
+  if (!confirm(`Пересоздать отложенный пост для «${title}»?`)) return;
+
+  await withActionLock(`recreate_${id}`, pillEl, async () => {
+    try {
+      const res = await api(`/api/channels/${id}/recreate`, { method: 'POST' });
+      notify(res.message);
+      if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      await loadChannels();
+    } catch (err) {
+      notify('Ошибка: ' + err.message, 'error');
+    }
+  }, { cooldownMs: 1000 });
 };
 
-window.triggerRefill = async function(id) {
-  try {
-    const res = await api(`/api/channels/${id}/refill`, { method: 'POST' });
-    notify(res.message);
-    loadChannels();
-  } catch (err) {
-    notify(err.message, 'error');
-  }
+window.triggerRefill = async function(id, btnEl = null) {
+  await withActionLock(`refill_${id}`, btnEl, async () => {
+    try {
+      const res = await api(`/api/channels/${id}/refill`, { method: 'POST' });
+      notify(res.message);
+      await loadChannels();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }, { cooldownMs: 800 });
 };
 
-window.triggerPostNow = async function(id) {
+window.triggerPostNow = async function(id, btnEl = null, postData = null) {
   if (!confirm('Опубликовать пост в канал прямо сейчас?')) return;
-  try {
-    const res = await api(`/api/channels/${id}/post_now`, { method: 'POST' });
-    notify(res.message);
-    loadChannels();
-  } catch (err) {
-    notify(err.message, 'error');
-  }
+
+  await withActionLock(`post_now_${id}`, btnEl, async () => {
+    try {
+      const options = { method: 'POST' };
+      if (postData) {
+        options.body = JSON.stringify(postData);
+      }
+      const res = await api(`/api/channels/${id}/post_now`, options);
+      notify(res.message);
+      await loadChannels();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }, { loadingText: '⏳ Публикация...', cooldownMs: 1200 });
 };
+
 
 // Copy settings from donor channel event
 if (elCopySourceSelect) {
@@ -251,7 +335,6 @@ if (elCopySourceSelect) {
     document.getElementById('ch-exact-times').value = donor.exact_times || '10:00,15:00,20:00';
     const chPostsPerDay = document.getElementById('ch-posts-per-day');
     if (chPostsPerDay) chPostsPerDay.value = donor.posts_per_day || 3;
-    document.getElementById('ch-buffer-target').value = donor.buffer_target || 3;
     document.getElementById('ch-is-active').checked = !!donor.is_active;
     toggleScheduleInputs();
   });
@@ -316,7 +399,6 @@ window.openChannelModal = function(id = null) {
       document.getElementById('ch-exact-times').value = ch.exact_times || '10:00,15:00,20:00';
       const chPostsPerDay = document.getElementById('ch-posts-per-day');
       if (chPostsPerDay) chPostsPerDay.value = ch.posts_per_day || 3;
-      document.getElementById('ch-buffer-target').value = ch.buffer_target || 3;
       document.getElementById('ch-is-active').checked = !!ch.is_active;
     }
   } else {
@@ -384,46 +466,49 @@ if (elPostsPerDay) elPostsPerDay.addEventListener('input', updateTimesPerDayHint
 
 elChannelForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const id = document.getElementById('channel-db-id').value;
+  const submitBtn = elChannelForm.querySelector('button[type="submit"]');
 
-  let titleVal = document.getElementById('ch-title').value.trim();
-  const channelIdVal = document.getElementById('ch-channel-id').value.trim();
-  if (!titleVal && channelIdVal) {
-    await checkAndAutoFetchTitle();
-    titleVal = document.getElementById('ch-title').value.trim();
-  }
+  await withActionLock('channel_form_submit', submitBtn, async () => {
+    const id = document.getElementById('channel-db-id').value;
 
-  const postsPerDayVal = parseInt(document.getElementById('ch-posts-per-day')?.value, 10) || 3;
-
-  const payload = {
-    title: titleVal,
-    channel_id: channelIdVal,
-    gdrive_folder_id: document.getElementById('ch-gdrive-folder').value.trim(),
-    gdrive_texts_file_id: document.getElementById('ch-gdrive-texts').value.trim(),
-    footer_text: document.getElementById('ch-footer-text').value.trim(),
-    photos_min: parseInt(document.getElementById('ch-photos-min').value, 10),
-    photos_max: parseInt(document.getElementById('ch-photos-max').value, 10),
-    schedule_mode: document.getElementById('ch-schedule-mode').value,
-    interval_minutes: parseInt(document.getElementById('ch-interval').value, 10),
-    exact_times: document.getElementById('ch-exact-times').value.trim(),
-    posts_per_day: postsPerDayVal,
-    buffer_target: parseInt(document.getElementById('ch-buffer-target').value, 10),
-    is_active: document.getElementById('ch-is-active').checked
-  };
-
-  try {
-    if (id) {
-      await api(`/api/channels/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
-      notify('Настройки канала сохранены!');
-    } else {
-      await api('/api/channels', { method: 'POST', body: JSON.stringify(payload) });
-      notify('Канал успешно добавлен!');
+    let titleVal = document.getElementById('ch-title').value.trim();
+    const channelIdVal = document.getElementById('ch-channel-id').value.trim();
+    if (!titleVal && channelIdVal) {
+      await checkAndAutoFetchTitle();
+      titleVal = document.getElementById('ch-title').value.trim();
     }
-    closeModal();
-    loadChannels();
-  } catch (err) {
-    notify(err.message, 'error');
-  }
+
+    const postsPerDayVal = parseInt(document.getElementById('ch-posts-per-day')?.value, 10) || 3;
+
+    const payload = {
+      title: titleVal,
+      channel_id: channelIdVal,
+      gdrive_folder_id: document.getElementById('ch-gdrive-folder').value.trim(),
+      gdrive_texts_file_id: document.getElementById('ch-gdrive-texts').value.trim(),
+      footer_text: document.getElementById('ch-footer-text').value.trim(),
+      photos_min: parseInt(document.getElementById('ch-photos-min').value, 10),
+      photos_max: parseInt(document.getElementById('ch-photos-max').value, 10),
+      schedule_mode: document.getElementById('ch-schedule-mode').value,
+      interval_minutes: parseInt(document.getElementById('ch-interval').value, 10),
+      exact_times: document.getElementById('ch-exact-times').value.trim(),
+      posts_per_day: postsPerDayVal,
+      is_active: document.getElementById('ch-is-active').checked
+    };
+
+    try {
+      if (id) {
+        await api(`/api/channels/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        notify('Настройки канала сохранены!');
+      } else {
+        await api('/api/channels', { method: 'POST', body: JSON.stringify(payload) });
+        notify('Канал успешно добавлен!');
+      }
+      closeModal();
+      await loadChannels();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }, { loadingText: '⏳ Сохранение...', cooldownMs: 1000 });
 });
 
 elBtnDeleteChannel.addEventListener('click', async () => {
@@ -431,15 +516,18 @@ elBtnDeleteChannel.addEventListener('click', async () => {
   if (!id) return;
   if (!confirm('Вы уверены, что хотите удалить этот канал из автопостера?')) return;
 
-  try {
-    await api(`/api/channels/${id}`, { method: 'DELETE' });
-    notify('Канал удален.');
-    closeModal();
-    loadChannels();
-  } catch (err) {
-    notify(err.message, 'error');
-  }
+  await withActionLock(`channel_delete_${id}`, elBtnDeleteChannel, async () => {
+    try {
+      await api(`/api/channels/${id}`, { method: 'DELETE' });
+      notify('Канал удален.');
+      closeModal();
+      await loadChannels();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }, { loadingText: '⏳ Удаление...', cooldownMs: 1000 });
 });
+
 
 // --- Preview Tab & Lightbox ---
 let currentPreviewPhotos = [];
@@ -553,51 +641,67 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') prevLightboxImage();
 });
 
-document.getElementById('btn-generate-preview').addEventListener('click', async () => {
-  const channelId = elPreviewSelect.value;
-  if (!channelId) {
-    notify('Пожалуйста, выберите канал из списка.');
-    return;
-  }
+let currentPreviewPostData = null;
 
-  selectedPreviewChannelId = channelId;
-  elPreviewResult.classList.remove('hidden');
-  elPreviewCaption.textContent = 'Сборка поста и генерация случайного набора...';
-  elPreviewAlbumGrid.innerHTML = '';
+const elBtnGeneratePreview = document.getElementById('btn-generate-preview');
+if (elBtnGeneratePreview) {
+  elBtnGeneratePreview.addEventListener('click', async () => {
+    const channelId = elPreviewSelect.value;
+    if (!channelId) {
+      notify('Пожалуйста, выберите канал из списка.');
+      return;
+    }
 
-  try {
-    const preview = await api(`/api/channels/${channelId}/preview`, { method: 'POST' });
-    currentPreviewPhotos = preview.photos || [];
+    await withActionLock('generate_preview', elBtnGeneratePreview, async () => {
+      selectedPreviewChannelId = channelId;
+      elPreviewResult.classList.remove('hidden');
+      elPreviewCaption.textContent = 'Сборка поста и генерация случайного набора...';
+      elPreviewAlbumGrid.innerHTML = '';
+      currentPreviewPostData = null;
 
-    // Render real photos with dual fallback and full screen click
-    const gridClass = preview.photos.length === 1 ? 'album-grid single' : 'album-grid';
-    elPreviewAlbumGrid.className = gridClass;
-    elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => {
-      const primaryUrl = (p.thumbnailLink && p.thumbnailLink.replace(/=s\d+$/, '=s800')) || `/api/images/${p.id}`;
-      const fallbackUrl = `/api/images/${p.id}`;
-      return `
-        <div class="album-photo-wrap" onclick="openLightbox(${i})" title="Нажмите, чтобы открыть фото на весь экран">
-          <img src="${primaryUrl}"
-               alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
-               class="preview-photo-img"
-               loading="lazy"
-               onerror="if(this.src !== '${fallbackUrl}'){ this.src = '${fallbackUrl}'; } else { this.onerror=null; this.parentElement.innerHTML='<div class=\\'photo-placeholder\\'><span>🖼️</span><span style=\\'font-size:10px; margin-top:4px;\\'>${escapeHtml(p.name || 'Фото')}</span></div>'; }" />
-        </div>
-      `;
-    }).join('');
+      try {
+        const preview = await api(`/api/channels/${channelId}/preview`, { method: 'POST' });
+        currentPreviewPhotos = preview.photos || [];
+        currentPreviewPostData = {
+          caption: preview.caption || '',
+          photo_ids: (preview.photos || []).map(p => p.id),
+          raw_text: preview.raw_text || ''
+        };
 
-    // Render HTML caption
-    elPreviewCaption.innerHTML = preview.caption || '<i style="color:var(--hint-color)">Подпись отсутствует</i>';
+        // Render real photos with dual fallback and full screen click
+        const gridClass = preview.photos.length === 1 ? 'album-grid single' : 'album-grid';
+        elPreviewAlbumGrid.className = gridClass;
+        elPreviewAlbumGrid.innerHTML = preview.photos.map((p, i) => {
+          const primaryUrl = (p.thumbnailLink && p.thumbnailLink.replace(/=s\d+$/, '=s800')) || `/api/images/${p.id}`;
+          const fallbackUrl = `/api/images/${p.id}`;
+          return `
+            <div class="album-photo-wrap" onclick="openLightbox(${i})" title="Нажмите, чтобы открыть фото на весь экран">
+              <img src="${primaryUrl}"
+                   alt="${escapeHtml(p.name || `Фото ${i+1}`)}"
+                   class="preview-photo-img"
+                   loading="lazy"
+                   onerror="if(this.src !== '${fallbackUrl}'){ this.src = '${fallbackUrl}'; } else { this.onerror=null; this.parentElement.innerHTML='<div class=\\'photo-placeholder\\'><span>🖼️</span><span style=\\'font-size:10px; margin-top:4px;\\'>${escapeHtml(p.name || 'Фото')}</span></div>'; }" />
+            </div>
+          `;
+        }).join('');
 
-  } catch (err) {
-    elPreviewCaption.innerHTML = `<span style="color:var(--accent-red)">Ошибка: ${err.message}</span>`;
-  }
-});
+        // Render HTML caption
+        elPreviewCaption.innerHTML = preview.caption || '<i style="color:var(--hint-color)">Подпись отсутствует</i>';
 
-document.getElementById('btn-publish-preview-now').addEventListener('click', async () => {
-  if (!selectedPreviewChannelId) return;
-  await triggerPostNow(selectedPreviewChannelId);
-});
+      } catch (err) {
+        elPreviewCaption.innerHTML = `<span style="color:var(--accent-red)">Ошибка: ${err.message}</span>`;
+      }
+    }, { loadingText: '⏳ Сборка поста...', cooldownMs: 800 });
+  });
+}
+
+const elBtnPublishPreview = document.getElementById('btn-publish-preview-now');
+if (elBtnPublishPreview) {
+  elBtnPublishPreview.addEventListener('click', async () => {
+    if (!selectedPreviewChannelId) return;
+    await triggerPostNow(selectedPreviewChannelId, elBtnPublishPreview, currentPreviewPostData);
+  });
+}
 
 // --- Logs & Status ---
 async function loadStatusAndLogs() {
@@ -636,11 +740,24 @@ async function loadStatusAndLogs() {
   }
 }
 
-document.getElementById('btn-refresh').addEventListener('click', () => {
-  loadChannels();
-  loadStatusAndLogs();
-});
-document.getElementById('btn-clear-logs-view').addEventListener('click', loadStatusAndLogs);
+const elBtnRefresh = document.getElementById('btn-refresh');
+if (elBtnRefresh) {
+  elBtnRefresh.addEventListener('click', async () => {
+    await withActionLock('global_refresh', elBtnRefresh, async () => {
+      await Promise.all([loadChannels(), loadStatusAndLogs()]);
+    }, { cooldownMs: 800 });
+  });
+}
+
+const elBtnClearLogs = document.getElementById('btn-clear-logs-view');
+if (elBtnClearLogs) {
+  elBtnClearLogs.addEventListener('click', async () => {
+    await withActionLock('logs_refresh', elBtnClearLogs, async () => {
+      await loadStatusAndLogs();
+    }, { cooldownMs: 600 });
+  });
+}
+
 
 // Escape HTML helper
 function escapeHtml(str) {

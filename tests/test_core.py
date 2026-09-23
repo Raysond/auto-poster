@@ -117,7 +117,6 @@ async def test_database_lifecycle(tmp_path):
         "photos_max": 5,
         "interval_minutes": 120,
         "schedule_mode": "interval",
-        "buffer_target": 3,
         "is_active": True
     }
     ch_id = await db.create_channel(ch_data)
@@ -127,7 +126,7 @@ async def test_database_lifecycle(tmp_path):
     ch = await db.get_channel_by_id(ch_id)
     assert ch is not None
     assert ch["title"] == "Тестовый канал"
-    assert ch["buffer_target"] == 3
+    assert ch["buffer_target"] == 1
 
     # 3. Test used photos tracking and reset
     await db.mark_photos_as_used("-1001234567890", ["img1", "img2", "img3"])
@@ -194,7 +193,6 @@ async def test_queue_manager_recreate_queue(tmp_path):
         "gdrive_folder_id": "folder1",
         "interval_minutes": 60,
         "schedule_mode": "interval",
-        "buffer_target": 2,
         "is_active": True
     })
     ch = await db.get_channel_by_id(ch_id)
@@ -222,9 +220,9 @@ async def test_queue_manager_recreate_queue(tmp_path):
         ch["interval_minutes"] = 15
         added = await queue_manager.recreate_queue(ch)
 
-        assert added == 2
+        assert added == 1
         queue = await db.get_channel_queue("-100555")
-        assert len(queue) == 2
+        assert len(queue) == 1
         assert all(item["caption"] == "New Post" for item in queue)
 
 
@@ -277,3 +275,65 @@ def test_telegram_proxy_session():
     session = AiohttpSession(proxy=proxy_url)
     assert session is not None
     assert session.proxy == proxy_url
+
+
+@pytest.mark.asyncio
+async def test_post_builder_small_folder_does_not_crash(tmp_path):
+    """Verify that build_post gracefully handles folders with fewer images than photos_min."""
+    from core.database import db
+    db.db_path = str(tmp_path / "test_small_folder.db")
+    await db.init_db()
+
+    pb = PostBuilder()
+    dummy_images = [{"id": "single_img_1", "name": "single.jpg"}]
+
+    with patch("services.post_builder.gdrive_service") as mock_gdrive:
+        mock_gdrive.list_images_in_folder = AsyncMock(return_value=dummy_images)
+        mock_gdrive.get_texts_list = AsyncMock(return_value=["Текст 1"])
+        mock_gdrive.get_footer = AsyncMock(return_value="")
+
+        channel = {
+            "channel_id": "-100888",
+            "title": "Small Folder Channel",
+            "gdrive_folder_id": "small_folder",
+            "photos_min": 3,
+            "photos_max": 5
+        }
+
+        # Should not crash with ValueError: empty range for randrange()
+        post = await pb.build_post(channel)
+        assert len(post["photo_files"]) == 1
+        assert post["photo_ids"] == ["single_img_1"]
+
+
+@pytest.mark.asyncio
+async def test_post_builder_used_text_filtering(tmp_path):
+    """Verify that db.get_text_hash properly filters out used texts."""
+    from core.database import db
+    db.db_path = str(tmp_path / "test_text_filter.db")
+    await db.init_db()
+
+    pb = PostBuilder()
+    dummy_images = [{"id": f"img_{i}", "name": f"img_{i}.jpg"} for i in range(5)]
+    dummy_texts = ["Text A", "Text B"]
+
+    with patch("services.post_builder.gdrive_service") as mock_gdrive:
+        mock_gdrive.list_images_in_folder = AsyncMock(return_value=dummy_images)
+        mock_gdrive.get_texts_list = AsyncMock(return_value=dummy_texts)
+        mock_gdrive.get_footer = AsyncMock(return_value="")
+
+        channel = {
+            "channel_id": "-100999",
+            "title": "Text Filter Channel",
+            "gdrive_folder_id": "fld",
+            "gdrive_texts_file_id": "txt_file",
+            "photos_min": 1,
+            "photos_max": 2
+        }
+
+        # Mark "Text A" as used
+        await db.mark_text_as_used("-100999", "Text A")
+
+        # Now build_post MUST pick "Text B" because "Text A" is in used_text_hashes
+        post = await pb.build_post(channel)
+        assert post["raw_text"] == "Text B"

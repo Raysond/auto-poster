@@ -178,8 +178,12 @@ class GoogleDriveService:
 
         footer_file_id = channel.get("gdrive_footer_file_id")
         if footer_file_id:
-            content = await self.read_text_file(footer_file_id)
-            return content.strip()
+            try:
+                content = await self.read_text_file(footer_file_id)
+                return content.strip()
+            except Exception as e:
+                logger.warning(f"Не удалось прочитать файл футера Google Drive ({footer_file_id}): {e}")
+                return ""
 
         return ""
 
