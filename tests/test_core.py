@@ -359,3 +359,18 @@ def test_normalize_channel_id():
     assert normalize_channel_id("") == ""
     assert normalize_channel_id(None) == ""
 
+
+@pytest.mark.asyncio
+async def test_activity_logs_novosibirsk_timezone(tmp_path):
+    from zoneinfo import ZoneInfo
+    test_db = Database(str(tmp_path / "test_tz.db"))
+    await test_db.init_db()
+
+    expected_hour = datetime.now(ZoneInfo("Asia/Novosibirsk")).strftime("%Y-%m-%d %H")
+    await test_db.add_log("Тестовое событие с таймзоной Новосибирска", level="INFO")
+
+    logs = await test_db.get_logs(limit=1)
+    assert len(logs) == 1
+    assert logs[0]["created_at"].startswith(expected_hour)
+
+

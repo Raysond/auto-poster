@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -19,10 +21,15 @@ from services.queue_manager import queue_manager
 from services.scheduler import bot_scheduler
 from webapp.api.routes import router as api_router
 
-# Logging setup
+# Logging setup (Asia/Novosibirsk UTC+7)
+def _nsk_converter(*args):
+    return datetime.now(ZoneInfo("Asia/Novosibirsk")).timetuple()
+
+logging.Formatter.converter = _nsk_converter
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("auto-poster")
 

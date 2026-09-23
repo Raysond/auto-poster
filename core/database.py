@@ -3,10 +3,13 @@ import json
 import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import aiosqlite
 from core.config import settings
+
+NOVOSIBIRSK_TZ = ZoneInfo("Asia/Novosibirsk")
 
 
 def get_text_hash(text: str) -> str:
@@ -74,6 +77,15 @@ class Database:
                 await conn.execute("ALTER TABLE scheduled_queue ADD COLUMN raw_text TEXT DEFAULT ''")
             except Exception:
                 pass
+            try:
+                await conn.execute("CREATE TABLE IF NOT EXISTS _migrations_tz (id INT PRIMARY KEY)")
+                cur = await conn.execute("SELECT COUNT(*) FROM _migrations_tz")
+                res = await cur.fetchone()
+                if res and res[0] == 0:
+                    await conn.execute("UPDATE activity_logs SET created_at = datetime(created_at, '+7 hours') WHERE created_at IS NOT NULL")
+                    await conn.execute("INSERT INTO _migrations_tz (id) VALUES (1)")
+            except Exception:
+                pass
             await conn.executescript("""
 
                 CREATE TABLE IF NOT EXISTS used_photos (
@@ -110,7 +122,7 @@ class Database:
                     channel_id TEXT,
                     level TEXT DEFAULT 'INFO',
                     message TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT (datetime('now', '+7 hours'))
                 );
             """)
             await conn.commit()
@@ -380,10 +392,11 @@ class Database:
 
     # --- Activity Logs ---
     async def add_log(self, message: str, level: str = "INFO", channel_id: Optional[str] = None):
+        now_nsk = datetime.now(NOVOSIBIRSK_TZ).strftime("%Y-%m-%d %H:%M:%S")
         async with self.get_connection() as conn:
             await conn.execute(
-                "INSERT INTO activity_logs (channel_id, level, message) VALUES (?, ?, ?)",
-                (str(channel_id) if channel_id else None, level, message)
+                "INSERT INTO activity_logs (channel_id, level, message, created_at) VALUES (?, ?, ?, ?)",
+                (str(channel_id) if channel_id else None, level, message, now_nsk)
             )
             await conn.commit()
 
